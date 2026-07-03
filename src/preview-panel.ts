@@ -5,6 +5,15 @@ interface TOCItem {
     level: number;
     text: string;
     id: string;
+    line: number;
+}
+
+interface TOCNode {
+    level: number;
+    text: string;
+    id: string;
+    line: number;
+    children: TOCNode[];
 }
 
 function slugify(text: string): string {
@@ -25,6 +34,9 @@ export class MarkdownPreviewPanel {
     private currentFile: string = '';
     private rawMarkdown: string = '';
     private currentTheme: string = 'default';
+    private syncVersion: number = 0;
+    private initialized: boolean = false;
+    private updateTimer: NodeJS.Timeout | undefined;
     private readonly md: MarkdownIt;
 
     public static revive(panel: vscode.WebviewPanel, extensionUri: vscode.Uri) {
@@ -83,6 +95,31 @@ export class MarkdownPreviewPanel {
                     vscode.env.clipboard.writeText(message.text);
                 } else if (message.command === 'set-theme') {
                     this.currentTheme = message.theme;
+                } else if (message.command === 'scroll-editor') {
+                    const editor = vscode.window.visibleTextEditors.find(
+                        e => e.document.languageId === 'markdown'
+                    );
+                    if (editor) {
+                        const line = Math.max(0, Math.min(message.line - 1, editor.document.lineCount - 1));
+                        const position = new vscode.Position(line, 0);
+                        const version = ++this.syncVersion;
+                        editor.selection = new vscode.Selection(position, position);
+                        vscode.window.showTextDocument(editor.document, {
+                            viewColumn: editor.viewColumn,
+                            preserveFocus: true,
+                            preview: true,
+                        }).then(() => {
+                            editor.revealRange(
+                                new vscode.Range(position, position),
+                                vscode.TextEditorRevealType.InCenter
+                            );
+                        });
+                        setTimeout(() => {
+                            if (this.syncVersion === version) {
+                                this.syncVersion = 0;
+                            }
+                        }, 500);
+                    }
                 }
             },
             null,
@@ -90,32 +127,95 @@ export class MarkdownPreviewPanel {
         );
 
         this.updateFromActiveEditor();
+
+        vscode.window.onDidChangeTextEditorSelection(
+            (e) => {
+                if (e.textEditor.document.languageId === 'markdown') {
+                    this.syncEditorToPreview(e.textEditor);
+                }
+            },
+            null,
+            this.disposables
+        );
     }
 
-    public update(markdown: string, filePath?: string) {
+    private syncEditorToPreview(editor: vscode.TextEditor) {
+        if (this.syncVersion !== 0) { return; }
+        const line = editor.selection.active.line;
+        const text = editor.document.getText();
+        const lines = text.split('\n');
+        let headingLine = -1;
+        for (let i = line; i >= 0; i--) {
+            if (/^#{1,6}\s/.test(lines[i])) {
+                headingLine = i;
+                break;
+            }
+        }
+        if (headingLine >= 0) {
+            const headingId = slugify(
+                lines[headingLine].replace(/^#{1,6}\s+/, '').trim()
+            );
+            this.panel.webview.postMessage({
+                command: 'scroll-preview',
+                id: headingId,
+            });
+        }
+    }
+
+    public update(markdown: string, filePath?: string, immediate: boolean = false) {
         this.rawMarkdown = markdown;
         this.currentFile = filePath || this.currentFile;
 
+        if (this.updateTimer) {
+            clearTimeout(this.updateTimer);
+        }
+
+        if (immediate) {
+            this.doUpdate();
+        } else {
+            this.updateTimer = setTimeout(() => {
+                this.doUpdate();
+            }, 300);
+        }
+    }
+
+    private doUpdate() {
+        const markdown = this.rawMarkdown;
         const tocItems = this.extractTOC(markdown);
+        const tocTree = this.buildTOCTree(tocItems);
         const html = this.md.render(markdown);
         const filename = this.currentFile
             ? this.currentFile.replace(/^.*[\\/]/, '')
             : 'untitled.md';
 
         this.panel.title = filename;
-        this.panel.webview.html = this.getWebviewContent(
-            html,
-            tocItems,
-            filename,
-            markdown,
-            this.currentTheme
-        );
+
+        if (!this.initialized) {
+            this.panel.webview.html = this.getWebviewContent(
+                html,
+                tocTree,
+                tocItems,
+                filename,
+                markdown,
+                this.currentTheme
+            );
+            this.initialized = true;
+        } else {
+            this.panel.webview.postMessage({
+                command: 'update-content',
+                html: html,
+                tocTree: tocTree,
+                tocItems: tocItems,
+                filename: filename,
+                rawMarkdown: markdown,
+            });
+        }
     }
 
     private updateFromActiveEditor() {
         const editor = vscode.window.activeTextEditor;
         if (editor && editor.document.languageId === 'markdown') {
-            this.update(editor.document.getText(), editor.document.fileName);
+            this.update(editor.document.getText(), editor.document.fileName, true);
         } else if (!this.rawMarkdown) {
             this.panel.webview.html = this.getEmptyContent();
         }
@@ -160,11 +260,30 @@ export class MarkdownPreviewPanel {
                         level,
                         text: inline.content,
                         id: slugify(inline.content),
+                        line: (token.map ? token.map[0] : 0) + 1,
                     });
                 }
             }
         }
         return items;
+    }
+
+    private buildTOCTree(items: TOCItem[]): TOCNode[] {
+        const root: TOCNode[] = [];
+        const stack: TOCNode[] = [];
+        for (const item of items) {
+            const node: TOCNode = { ...item, children: [] };
+            while (stack.length > 0 && stack[stack.length - 1].level >= node.level) {
+                stack.pop();
+            }
+            if (stack.length === 0) {
+                root.push(node);
+            } else {
+                stack[stack.length - 1].children.push(node);
+            }
+            stack.push(node);
+        }
+        return root;
     }
 
     private jsonEscape(s: string): string {
@@ -197,24 +316,34 @@ body {
 </html>`;
     }
 
+    private renderTOCNode(node: TOCNode): string {
+        const hasChildren = node.children.length > 0;
+        const toggle = hasChildren
+            ? `<span class="toc-toggle">▼</span>`
+            : '';
+        const childrenHTML = hasChildren
+            ? `<ul>${node.children.map((c) => this.renderTOCNode(c)).join('')}</ul>`
+            : '';
+        return `<li class="toc-item toc-level-${node.level}">
+            ${toggle}<a href="#${node.id}" title="${this.jsonEscape(node.text)}">${this.jsonEscape(node.text)}</a>
+            ${childrenHTML}
+        </li>`;
+    }
+
     private getWebviewContent(
         html: string,
+        tocTree: TOCNode[],
         tocItems: TOCItem[],
         filename: string,
         rawMarkdown: string,
         initialTheme: string
     ): string {
-        const hasTOC = tocItems.length > 0;
+        const hasTOC = tocTree.length > 0;
         const tocJSON = JSON.stringify(tocItems);
         const safeMarkdown = JSON.stringify(rawMarkdown);
 
-        const tocListHTML = tocItems
-            .map(
-                (item) =>
-                    `<li class="toc-item toc-level-${item.level}">
-                        <a href="#${item.id}" title="${this.jsonEscape(item.text)}">${this.jsonEscape(item.text)}</a>
-                    </li>`
-            )
+        const tocListHTML = tocTree
+            .map((node) => this.renderTOCNode(node))
             .join('\n');
 
         return `<!DOCTYPE html>
@@ -399,10 +528,11 @@ body {
 #toc-list::-webkit-scrollbar { width: 4px; }
 #toc-list::-webkit-scrollbar-thumb { background: var(--md-scrollbar); border-radius: 2px; }
 
-.toc-item { padding: 0 16px; }
+.toc-item { padding: 0 16px 0 0; }
 .toc-item a {
-    display: block;
-    padding: 5px 12px;
+    display: inline-block;
+    vertical-align: middle;
+    padding: 5px 12px 5px 4px;
     color: var(--md-toc-fg);
     text-decoration: none;
     font-size: 13px;
@@ -411,27 +541,45 @@ body {
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+    max-width: calc(100% - 20px);
     transition: background 0.15s, color 0.15s;
 }
+.toc-toggle {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 16px;
+    height: 20px;
+    font-size: 10px;
+    cursor: pointer;
+    color: var(--md-muted);
+    user-select: none;
+    vertical-align: middle;
+    flex-shrink: 0;
+}
+.toc-toggle:hover { color: var(--md-fg); }
+.toc-item.collapsed > .toc-toggle { transform: rotate(-90deg); }
+.toc-item.collapsed > ul { display: none; }
+.toc-item ul { list-style: none; padding-left: 0; }
 .toc-item a:hover { background: var(--md-toc-hover-bg); }
-.toc-item.active a {
+.toc-item.active > a {
     background: var(--md-toc-active-bg);
     color: var(--md-toc-active-fg);
     font-weight: 600;
     border-left: 3px solid var(--md-accent);
-    padding-left: 9px;
+    padding-left: 1px;
 }
-.toc-level-1 a { font-weight: 600; font-size: 14px; }
-.toc-level-2 a { padding-left: 24px; }
-.toc-level-2.active a { padding-left: 21px; }
+.toc-level-2 a { padding-left: 20px; }
+.toc-level-2.active > a { padding-left: 17px; }
 .toc-level-3 a { padding-left: 36px; }
-.toc-level-3.active a { padding-left: 33px; }
-.toc-level-4 a { padding-left: 48px; }
-.toc-level-4.active a { padding-left: 45px; }
-.toc-level-5 a { padding-left: 60px; }
-.toc-level-5.active a { padding-left: 57px; }
-.toc-level-6 a { padding-left: 72px; }
-.toc-level-6.active a { padding-left: 69px; }
+.toc-level-3.active > a { padding-left: 33px; }
+.toc-level-4 a { padding-left: 52px; }
+.toc-level-4.active > a { padding-left: 49px; }
+.toc-level-5 a { padding-left: 68px; }
+.toc-level-5.active > a { padding-left: 65px; }
+.toc-level-6 a { padding-left: 84px; }
+.toc-level-6.active > a { padding-left: 81px; }
+.toc-level-1 > a { font-weight: 600; font-size: 14px; }
 
 /* ====== Main Content ====== */
 #main {
@@ -725,6 +873,11 @@ body.no-toc #toggle-toc-side { display: none; }
     var toast = document.getElementById('toast');
     var toastTimer;
 
+    var vscodeApi = typeof acquireVsCodeApi !== 'undefined' ? acquireVsCodeApi() : null;
+
+    var copyIcon = '<svg viewBox="0 0 16 16" fill="currentColor" width="14" height="14"><path fill-rule="evenodd" d="M4 1.5h8.5a1 1 0 011 1V12h-1V2.5H4v-1zM2.5 4h8a.5.5 0 01.5.5v9a.5.5 0 01-.5.5h-8a.5.5 0 01-.5-.5v-9a.5.5 0 01.5-.5zM3 5v8h7V5H3z"/></svg>';
+    var checkIcon = '<svg viewBox="0 0 16 16" fill="currentColor" width="14" height="14"><path fill-rule="evenodd" d="M13.78 4.22a.75.75 0 010 1.06l-7.25 7.25a.75.75 0 01-1.06 0L2.22 9.28a.75.75 0 011.06-1.06L6 10.94l6.72-6.72a.75.75 0 011.06 0z"/></svg>';
+
     function showToast(msg) {
         toast.textContent = msg;
         toast.classList.add('show');
@@ -806,28 +959,57 @@ body.no-toc #toggle-toc-side { display: none; }
     });
 
     // ====== TOC Click -> Scroll ======
+    var headingLines = {};
+    var tocData = ${tocJSON};
+    tocData.forEach(function(item) {
+        headingLines[item.id] = item.line;
+    });
+
     if (tocList) {
         tocList.addEventListener('click', function(e) {
+            var toggle = e.target.closest('.toc-toggle');
+            if (toggle) {
+                var item = toggle.parentElement;
+                item.classList.toggle('collapsed');
+                return;
+            }
             var a = e.target.closest('a');
             if (!a) { return; }
             e.preventDefault();
             var id = a.getAttribute('href').slice(1);
             var target = document.getElementById(id);
             if (target) {
+                lastSyncFromExtension = Date.now();
                 target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+            }
+            // Sync editor
+            if (headingLines[id]) {
+                if (vscodeApi) {
+                    vscodeApi.postMessage({ command: 'scroll-editor', line: headingLines[id] });
+                }
             }
         });
     }
 
     // ====== Scroll Spy ======
-    var tocLinks = tocList ? tocList.querySelectorAll('a') : [];
+    var tocLinks = tocList ? tocList.querySelectorAll('.toc-item > a') : [];
     var headingIds = [];
-    tocLinks.forEach(function(a) {
-        var id = a.getAttribute('href').slice(1);
-        headingIds.push(id);
+    tocData.forEach(function(item) {
+        headingIds.push(item.id);
     });
 
     var activeId = null;
+    var lastSyncFromExtension = 0;
+
+    function expandAncestors(el) {
+        var parent = el.parentElement;
+        while (parent) {
+            if (parent.tagName === 'LI' && parent.classList.contains('toc-item')) {
+                parent.classList.remove('collapsed');
+            }
+            parent = parent.parentElement;
+        }
+    }
 
     function updateActiveHeading() {
         var newActive = null;
@@ -857,13 +1039,144 @@ body.no-toc #toggle-toc-side { display: none; }
 
         if (activeId !== newActive) {
             activeId = newActive;
+            var activeLink = null;
             tocLinks.forEach(function(link) {
-                link.parentElement.classList.toggle(
-                    'active',
-                    link.getAttribute('href') === '#' + activeId
-                );
+                var li = link.parentElement;
+                var isActive = link.getAttribute('href') === '#' + activeId;
+                li.classList.toggle('active', isActive);
+                if (isActive) {
+                    expandAncestors(li);
+                    activeLink = link;
+                }
             });
+
+            // Scroll TOC to keep active item visible
+            if (activeLink && tocList) {
+                var linkRect = activeLink.getBoundingClientRect();
+                var listRect = tocList.getBoundingClientRect();
+                if (linkRect.top < listRect.top || linkRect.bottom > listRect.bottom) {
+                    activeLink.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+                }
+            }
+
+            if (activeId && headingLines[activeId]) {
+                if (vscodeApi && Date.now() - lastSyncFromExtension > 500) {
+                    vscodeApi.postMessage({ command: 'scroll-editor', line: headingLines[activeId] });
+                }
+            }
         }
+    }
+
+    // Sync: listen for scroll-preview messages from extension
+    window.addEventListener('message', function(e) {
+        var msg = e.data;
+        if (msg.command === 'scroll-preview') {
+            lastSyncFromExtension = Date.now();
+            var el = document.getElementById(msg.id);
+            if (el) {
+                el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+            }
+        } else if (msg.command === 'update-content') {
+            // Preserve scroll position
+            var savedScroll = contentArea.scrollTop;
+            var savedHeading = activeId;
+
+            // Update markdown content
+            var mdBody = document.querySelector('.markdown-body');
+            if (mdBody) { mdBody.innerHTML = msg.html; }
+
+            // Update markdown source
+            var sourceEl = document.getElementById('markdown-source');
+            if (sourceEl) { sourceEl.textContent = msg.rawMarkdown; }
+
+            // Update filename
+            var fnEl = document.querySelector('#toolbar .filename');
+            if (fnEl) { fnEl.textContent = msg.filename; }
+
+            // Rebuild TOC
+            headingLines = {};
+            headingIds = [];
+            msg.tocItems.forEach(function(item) {
+                headingLines[item.id] = item.line;
+                headingIds.push(item.id);
+            });
+
+            tocList.innerHTML = renderTOCTree(msg.tocTree);
+            tocLinks = tocList.querySelectorAll('.toc-item > a');
+            activeId = null;
+
+            // Re-attach copy buttons and observer
+            attachCopyButtons();
+            if (observer) { observer.disconnect(); }
+            if ('IntersectionObserver' in window && headingIds.length > 0) {
+                observer = new IntersectionObserver(function() {
+                    updateActiveHeading();
+                }, { rootMargin: '-80px 0px -70% 0px', threshold: 0 });
+                headingIds.forEach(function(id) {
+                    var el = document.getElementById(id);
+                    if (el) { observer.observe(el); }
+                });
+            }
+
+            // Restore scroll position
+            contentArea.scrollTop = savedScroll;
+
+            // Restore active heading highlight without triggering sync
+            if (savedHeading) {
+                tocLinks.forEach(function(link) {
+                    var li = link.parentElement;
+                    var isActive = link.getAttribute('href') === '#' + savedHeading;
+                    li.classList.toggle('active', isActive);
+                    if (isActive) { expandAncestors(li); }
+                });
+                activeId = savedHeading;
+            }
+        }
+    });
+
+    function renderTOCTree(nodes) {
+        return nodes.map(function(node) {
+            var hasChildren = node.children && node.children.length > 0;
+            var toggle = hasChildren ? '<span class="toc-toggle">\u25BC</span>' : '';
+            var childrenHTML = hasChildren ? '<ul>' + renderTOCTree(node.children) + '</ul>' : '';
+            return '<li class="toc-item toc-level-' + node.level + '">' +
+                toggle + '<a href="#' + node.id + '" title="' + node.text + '">' + node.text + '</a>' +
+                childrenHTML + '</li>';
+        }).join('');
+    }
+
+    function attachCopyButtons() {
+        document.querySelectorAll('.markdown-body pre').forEach(function(pre) {
+            if (pre.querySelector('.copy-code-btn')) { return; }
+            var btn = document.createElement('button');
+            btn.className = 'copy-code-btn';
+            btn.innerHTML = copyIcon;
+            btn.title = 'Copy code';
+            btn.addEventListener('click', function(e) {
+                e.stopPropagation();
+                var code = pre.querySelector('code');
+                var text = code ? code.textContent || '' : pre.textContent || '';
+                navigator.clipboard.writeText(text).then(function() {
+                    btn.innerHTML = checkIcon;
+                    btn.classList.add('copied');
+                    setTimeout(function() {
+                        btn.innerHTML = copyIcon;
+                        btn.classList.remove('copied');
+                    }, 2000);
+                }).catch(function() {
+                    if (vscodeApi) {
+                        vscodeApi.postMessage({ command: 'copy', text: text });
+                        btn.innerHTML = checkIcon;
+                        btn.classList.add('copied');
+                        setTimeout(function() {
+                            btn.innerHTML = copyIcon;
+                            btn.classList.remove('copied');
+                        }, 2000);
+                    }
+                });
+            });
+            pre.appendChild(btn);
+        });
     }
 
     var observer;
@@ -885,40 +1198,7 @@ body.no-toc #toggle-toc-side { display: none; }
     }
 
     // ====== Copy Code Block ======
-    var copyIcon = '<svg viewBox="0 0 16 16" fill="currentColor" width="14" height="14"><path fill-rule="evenodd" d="M4 1.5h8.5a1 1 0 011 1V12h-1V2.5H4v-1zM2.5 4h8a.5.5 0 01.5.5v9a.5.5 0 01-.5.5h-8a.5.5 0 01-.5-.5v-9a.5.5 0 01.5-.5zM3 5v8h7V5H3z"/></svg>';
-    var checkIcon = '<svg viewBox="0 0 16 16" fill="currentColor" width="14" height="14"><path fill-rule="evenodd" d="M13.78 4.22a.75.75 0 010 1.06l-7.25 7.25a.75.75 0 01-1.06 0L2.22 9.28a.75.75 0 011.06-1.06L6 10.94l6.72-6.72a.75.75 0 011.06 0z"/></svg>';
-
-    document.querySelectorAll('.markdown-body pre').forEach(function(pre) {
-        var btn = document.createElement('button');
-        btn.className = 'copy-code-btn';
-        btn.innerHTML = copyIcon;
-        btn.title = 'Copy code';
-        btn.addEventListener('click', function(e) {
-            e.stopPropagation();
-            var code = pre.querySelector('code');
-            var text = code ? code.textContent || '' : pre.textContent || '';
-            navigator.clipboard.writeText(text).then(function() {
-                btn.innerHTML = checkIcon;
-                btn.classList.add('copied');
-                setTimeout(function() {
-                    btn.innerHTML = copyIcon;
-                    btn.classList.remove('copied');
-                }, 2000);
-            }).catch(function() {
-                var vscode = acquireVsCodeApi ? acquireVsCodeApi() : null;
-                if (vscode) {
-                    vscode.postMessage({ command: 'copy', text: text });
-                    btn.innerHTML = checkIcon;
-                    btn.classList.add('copied');
-                    setTimeout(function() {
-                        btn.innerHTML = copyIcon;
-                        btn.classList.remove('copied');
-                    }, 2000);
-                }
-            });
-        });
-        pre.appendChild(btn);
-    });
+    attachCopyButtons();
 
     // ====== Copy All ======
     var copyAllBtn = document.getElementById('copy-all');
@@ -929,9 +1209,8 @@ body.no-toc #toggle-toc-side { display: none; }
             navigator.clipboard.writeText(text).then(function() {
                 showToast('Markdown source copied to clipboard');
             }).catch(function() {
-                var vscode = acquireVsCodeApi ? acquireVsCodeApi() : null;
-                if (vscode) {
-                    vscode.postMessage({ command: 'copy', text: text });
+                if (vscodeApi) {
+                    vscodeApi.postMessage({ command: 'copy', text: text });
                 }
                 showToast('Markdown source copied to clipboard');
             });
@@ -972,8 +1251,7 @@ body.no-toc #toggle-toc-side { display: none; }
             currentTheme = (currentTheme + 1) % themes.length;
             var theme = themes[currentTheme];
             applyTheme(theme);
-            var vscode = acquireVsCodeApi ? acquireVsCodeApi() : null;
-            if (vscode) { vscode.postMessage({ command: 'set-theme', theme: theme }); }
+            if (vscodeApi) { vscodeApi.postMessage({ command: 'set-theme', theme: theme }); }
         });
     }
 

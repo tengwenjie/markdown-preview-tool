@@ -28,7 +28,8 @@ export function activate(context: vscode.ExtensionContext) {
             ) {
                 MarkdownPreviewPanel.currentPanel.update(
                     editor.document.getText(),
-                    editor.document.fileName
+                    editor.document.fileName,
+                    true
                 );
             }
         }
