@@ -338,16 +338,33 @@ body {
 /* ====== TOC Sidebar ====== */
 #toc-panel {
     width: 260px;
-    min-width: 0;
+    min-width: 160px;
+    max-width: 500px;
     background: var(--md-sidebar-bg);
     border-left: 1px solid var(--md-border);
     display: flex;
     flex-direction: column;
-    transition: width 0.25s ease, opacity 0.25s ease;
+    transition: opacity 0.25s ease;
     overflow: hidden;
     flex-shrink: 0;
+    position: relative;
 }
-#toc-panel.collapsed { width: 0; opacity: 0; border-left: none; }
+#toc-panel.collapsed { width: 0 !important; opacity: 0; border-left: none; }
+
+#toc-resize-handle {
+    position: absolute;
+    top: 0;
+    left: -5px;
+    width: 10px;
+    height: 100%;
+    cursor: col-resize;
+    z-index: 10;
+}
+#toc-resize-handle:hover,
+#toc-resize-handle.dragging {
+    background: var(--md-accent);
+    opacity: 0.25;
+}
 
 #toc-header {
     display: flex;
@@ -674,6 +691,7 @@ body.no-toc #toggle-toc-side { display: none; }
 </div>
 
 <div id="toc-panel">
+    <div id="toc-resize-handle"></div>
     <div id="toc-header">
         <span class="title">Contents</span>
     </div>
@@ -716,11 +734,16 @@ body.no-toc #toggle-toc-side { display: none; }
     var scrollBubble = document.getElementById('scroll-bubble');
     var tocWidth = 260;
 
+    function getTOCWidth() {
+        return parseInt(tocPanel.style.width) || tocWidth;
+    }
+
     function updateBubblePosition() {
         if (tocPanel.classList.contains('collapsed')) {
             scrollBubble.style.setProperty('--bubble-right', '32px');
         } else {
-            scrollBubble.style.setProperty('--bubble-right', (32 + tocWidth) + 'px');
+            var w = getTOCWidth();
+            scrollBubble.style.setProperty('--bubble-right', (32 + w) + 'px');
         }
     }
 
@@ -744,6 +767,38 @@ body.no-toc #toggle-toc-side { display: none; }
             }
         });
     }
+
+    // ====== TOC Resize ======
+    var resizeHandle = document.getElementById('toc-resize-handle');
+    var isResizing = false;
+    var startX, startWidth;
+
+    resizeHandle.addEventListener('mousedown', function(e) {
+        if (tocPanel.classList.contains('collapsed')) { return; }
+        isResizing = true;
+        startX = e.clientX;
+        startWidth = tocPanel.offsetWidth;
+        resizeHandle.classList.add('dragging');
+        document.body.style.cursor = 'col-resize';
+        document.body.style.userSelect = 'none';
+        e.preventDefault();
+    });
+
+    document.addEventListener('mousemove', function(e) {
+        if (!isResizing) { return; }
+        var newWidth = startWidth + (startX - e.clientX);
+        newWidth = Math.max(160, Math.min(500, newWidth));
+        tocPanel.style.width = newWidth + 'px';
+        updateBubblePosition();
+    });
+
+    document.addEventListener('mouseup', function() {
+        if (!isResizing) { return; }
+        isResizing = false;
+        resizeHandle.classList.remove('dragging');
+        document.body.style.cursor = '';
+        document.body.style.userSelect = '';
+    });
 
     // ====== TOC Click -> Scroll ======
     if (tocList) {
