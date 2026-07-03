@@ -1,0 +1,90 @@
+{
+  "name": "markdown-preview-tool",
+  "displayName": "Markdown-Preview-tool",
+  "description": "",
+  "version": "0.0.1",
+  "engines": {
+    "vscode": "^1.125.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onLanguage:markdown"
+  ],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "markdown-preview-tool.showPreview",
+        "title": "Open Markdown Preview",
+        "icon": "$(preview)"
+      },
+      {
+        "command": "markdown-preview-tool.showPreviewToSide",
+        "title": "Open Markdown Preview to the Side"
+      }
+    ],
+    "menus": {
+      "editor/title": [
+        {
+          "command": "markdown-preview-tool.showPreview",
+          "when": "editorLangId == markdown",
+          "group": "navigation"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "markdown-preview-tool.showPreview",
+          "when": "editorLangId == markdown"
+        },
+        {
+          "command": "markdown-preview-tool.showPreviewToSide",
+          "when": "editorLangId == markdown"
+        }
+      ]
+    },
+    "keybindings": [
+      {
+        "command": "markdown-preview-tool.showPreview",
+        "key": "ctrl+shift+v",
+        "mac": "cmd+shift+v",
+        "when": "editorLangId == markdown"
+      }
+    ]
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run package",
+    "compile": "npm run check-types && npm run lint && node esbuild.js",
+    "watch": "npm-run-all -p watch:*",
+    "watch:esbuild": "node esbuild.js --watch",
+    "watch:tsc": "tsc --noEmit --watch --project tsconfig.json",
+    "package": "npm run check-types && npm run lint && node esbuild.js --production",
+    "compile-tests": "tsc -p . --outDir out",
+    "watch-tests": "tsc -p . -w --outDir out",
+    "pretest": "npm run compile-tests && npm run compile && npm run lint",
+    "check-types": "tsc --noEmit",
+    "lint": "eslint src",
+    "test": "vscode-test"
+  },
+  "devDependencies": {
+    "@types/markdown-it": "^14.1.2",
+    "@types/mocha": "^10.0.10",
+    "@types/node": "24.x",
+    "@types/vscode": "^1.125.0",
+    "@vscode/test-cli": "^0.0.15",
+    "@vscode/test-electron": "^3.0.0",
+    "esbuild": "^0.28.1",
+    "eslint": "^10.5.0",
+    "npm-run-all": "^4.1.5",
+    "typescript": "^6.0.3",
+    "typescript-eslint": "^8.61.1"
+  },
+  "overrides": {
+    "diff": "^8.0.4",
+    "serialize-javascript": "^7.0.6"
+  },
+  "dependencies": {
+    "markdown-it": "^14.3.0"
+  }
+}
