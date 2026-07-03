@@ -24,6 +24,7 @@ export class MarkdownPreviewPanel {
     private disposables: vscode.Disposable[] = [];
     private currentFile: string = '';
     private rawMarkdown: string = '';
+    private currentTheme: string = 'default';
     private readonly md: MarkdownIt;
 
     public static revive(panel: vscode.WebviewPanel, extensionUri: vscode.Uri) {
@@ -80,6 +81,8 @@ export class MarkdownPreviewPanel {
             (message) => {
                 if (message.command === 'copy') {
                     vscode.env.clipboard.writeText(message.text);
+                } else if (message.command === 'set-theme') {
+                    this.currentTheme = message.theme;
                 }
             },
             null,
@@ -104,7 +107,8 @@ export class MarkdownPreviewPanel {
             html,
             tocItems,
             filename,
-            markdown
+            markdown,
+            this.currentTheme
         );
     }
 
@@ -197,7 +201,8 @@ body {
         html: string,
         tocItems: TOCItem[],
         filename: string,
-        rawMarkdown: string
+        rawMarkdown: string,
+        initialTheme: string
     ): string {
         const hasTOC = tocItems.length > 0;
         const tocJSON = JSON.stringify(tocItems);
@@ -936,7 +941,9 @@ body.no-toc #toggle-toc-side { display: none; }
     // ====== Theme Switch ======
     var themes = ['default', 'light', 'dark'];
     var themeLabels = ['System', 'Light', 'Dark'];
-    var currentTheme = 0;
+    var initialTheme = '${this.jsonEscape(initialTheme)}';
+    var currentTheme = themes.indexOf(initialTheme);
+    if (currentTheme < 0) { currentTheme = 0; }
     var themeBtn = document.getElementById('theme-btn');
     var iconAuto = document.getElementById('theme-icon-auto');
     var iconLight = document.getElementById('theme-icon-light');
@@ -958,10 +965,15 @@ body.no-toc #toggle-toc-side { display: none; }
         themeBtn.title = 'Theme: ' + themeLabels[themes.indexOf(theme)];
     }
 
+    applyTheme(themes[currentTheme]);
+
     if (themeBtn) {
         themeBtn.addEventListener('click', function() {
             currentTheme = (currentTheme + 1) % themes.length;
-            applyTheme(themes[currentTheme]);
+            var theme = themes[currentTheme];
+            applyTheme(theme);
+            var vscode = acquireVsCodeApi ? acquireVsCodeApi() : null;
+            if (vscode) { vscode.postMessage({ command: 'set-theme', theme: theme }); }
         });
     }
 
