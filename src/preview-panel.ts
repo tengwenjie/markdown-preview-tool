@@ -33,7 +33,7 @@ export class MarkdownPreviewPanel {
     private disposables: vscode.Disposable[] = [];
     private currentFile: string = '';
     private rawMarkdown: string = '';
-    private currentTheme: string = 'default';
+    private currentTheme: string = 'light';
     private syncVersion: number = 0;
     private initialized: boolean = false;
     private updateTimer: NodeJS.Timeout | undefined;
@@ -93,6 +93,8 @@ export class MarkdownPreviewPanel {
             (message) => {
                 if (message.command === 'copy') {
                     vscode.env.clipboard.writeText(message.text);
+                } else if (message.command === 'refresh') {
+                    this.update(this.rawMarkdown, this.currentFile, true);
                 } else if (message.command === 'set-theme') {
                     this.currentTheme = message.theme;
                 } else if (message.command === 'scroll-editor') {
@@ -827,6 +829,9 @@ body.no-toc #toggle-toc-side { display: none; }
             <button id="toggle-toc-side" title="Toggle Table of Contents" aria-label="Toggle TOC">
                 <svg viewBox="0 0 16 16" fill="currentColor"><path fill-rule="evenodd" d="M2 3.5a.5.5 0 01.5-.5h11a.5.5 0 010 1h-11a.5.5 0 01-.5-.5zm0 4a.5.5 0 01.5-.5h11a.5.5 0 010 1h-11a.5.5 0 01-.5-.5zm0 4a.5.5 0 01.5-.5h11a.5.5 0 010 1h-11a.5.5 0 01-.5-.5z"/></svg>
             </button>
+            <button id="refresh-btn" title="Refresh preview">
+                <svg viewBox="0 0 16 16" fill="currentColor"><path fill-rule="evenodd" d="M8 3a5 5 0 104.546 2.914.5.5 0 01.908-.417A6 6 0 118 2v1z"/><path d="M8 4.466V.534a.25.25 0 01.41-.192l2.36 1.966c.12.1.12.284 0 .384L8.41 4.658A.25.25 0 018 4.466z"/></svg>
+            </button>
             <button id="theme-btn" title="Switch theme (Auto / Light / Dark)">
                 <svg id="theme-icon-auto" viewBox="0 0 16 16" fill="currentColor"><path fill-rule="evenodd" d="M0 2.5A1.5 1.5 0 011.5 1h13A1.5 1.5 0 0116 2.5v9a1.5 1.5 0 01-1.5 1.5h-13A1.5 1.5 0 010 11.5v-9zM1.5 2a.5.5 0 00-.5.5v9a.5.5 0 00.5.5h13a.5.5 0 00.5-.5v-9a.5.5 0 00-.5-.5h-13z"/><path d="M2 3h12v7H2V3z"/></svg>
                 <svg id="theme-icon-light" viewBox="0 0 16 16" fill="currentColor" style="display:none"><path fill-rule="evenodd" d="M8 1.5a.5.5 0 01.5.5v1a.5.5 0 01-1 0V2a.5.5 0 01.5-.5zm4.95 1.55a.5.5 0 010 .707l-.707.707a.5.5 0 11-.707-.707l.707-.707a.5.5 0 01.707 0zm1.55 4.45a.5.5 0 010 .5h-1a.5.5 0 010-1h1a.5.5 0 010 .5zM8 11.5a.5.5 0 01.5.5v1a.5.5 0 01-1 0v-1a.5.5 0 01.5-.5zm-4.95 1.55a.5.5 0 010-.707l.707-.707a.5.5 0 01.707.707l-.707.707a.5.5 0 01-.707 0zM1.5 7.5a.5.5 0 010-.5h1a.5.5 0 010 1h-1a.5.5 0 010-.5zm1.55-4.45a.5.5 0 01.707 0l.707.707a.5.5 0 01-.707.707l-.707-.707a.5.5 0 010-.707zM8 4.5a3.5 3.5 0 100 7 3.5 3.5 0 000-7z"/></svg>
@@ -1218,8 +1223,8 @@ body.no-toc #toggle-toc-side { display: none; }
     }
 
     // ====== Theme Switch ======
-    var themes = ['default', 'light', 'dark'];
-    var themeLabels = ['System', 'Light', 'Dark'];
+    var themes = ['light', 'dark', 'default'];
+    var themeLabels = ['Light', 'Dark', 'System'];
     var initialTheme = '${this.jsonEscape(initialTheme)}';
     var currentTheme = themes.indexOf(initialTheme);
     if (currentTheme < 0) { currentTheme = 0; }
@@ -1252,6 +1257,16 @@ body.no-toc #toggle-toc-side { display: none; }
             var theme = themes[currentTheme];
             applyTheme(theme);
             if (vscodeApi) { vscodeApi.postMessage({ command: 'set-theme', theme: theme }); }
+        });
+    }
+
+    // ====== Refresh ======
+    var refreshBtn = document.getElementById('refresh-btn');
+    if (refreshBtn) {
+        refreshBtn.addEventListener('click', function() {
+            if (vscodeApi) {
+                vscodeApi.postMessage({ command: 'refresh' });
+            }
         });
     }
 
