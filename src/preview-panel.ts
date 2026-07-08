@@ -706,7 +706,7 @@ body {
 #toc-list::-webkit-scrollbar { width: 4px; }
 #toc-list::-webkit-scrollbar-thumb { background: var(--md-scrollbar); border-radius: 2px; }
 
-.toc-item { padding: 0 16px 0 0; }
+.toc-item { padding: 0 5px 0 0; }
 .toc-item a {
     display: inline-block;
     vertical-align: middle;
@@ -719,7 +719,7 @@ body {
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
-    max-width: calc(100% - 20px);
+    max-width: calc(100% - 5px);
     transition: background 0.15s, color 0.15s;
 }
 .toc-toggle {
@@ -768,47 +768,44 @@ body {
     overflow: hidden;
 }
 
-/* Toolbar */
-#toolbar {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    padding: 10px 20px;
+/* Context Menu */
+#context-menu {
+    position: fixed;
+    display: none;
+    flex-direction: column;
+    min-width: 190px;
+    padding: 4px;
     background: var(--md-toolbar-bg);
-    border-bottom: 1px solid var(--md-border);
-    flex-shrink: 0;
-}
-#toolbar .left { display: flex; align-items: center; gap: 10px; }
-#toolbar .center { display: flex; align-items: center; gap: 2px; }
-#toolbar .right { display: flex; align-items: center; gap: 4px; }
-#toolbar .filename {
-    font-size: 13px;
-    font-weight: 500;
-    color: var(--md-toolbar-fg);
-}
-#toolbar button {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    padding: 5px;
     border: 1px solid var(--md-border);
-    border-radius: 4px;
-    background: var(--md-btn-bg);
-    color: var(--md-btn-fg);
-    cursor: pointer;
-    font-size: 12px;
-    transition: background 0.15s;
-    width: 28px;
-    height: 28px;
+    border-radius: 6px;
+    box-shadow: 0 8px 24px rgba(0,0,0,0.18);
+    z-index: 1000;
 }
-#toolbar button:hover { background: var(--md-btn-hover-bg); color: var(--md-fg); }
-#toolbar button svg { width: 14px; height: 14px; }
-#toolbar .zoom-val {
-    font-size: 12px;
+#context-menu.show { display: flex; }
+#context-menu button {
+    display: block;
+    width: 100%;
+    padding: 7px 10px;
+    border: none;
+    border-radius: 4px;
+    background: transparent;
+    color: var(--md-toolbar-fg);
+    cursor: pointer;
+    font: inherit;
+    font-size: 13px;
+    text-align: left;
+}
+#context-menu button:hover { background: var(--md-btn-hover-bg); color: var(--md-fg); }
+#context-menu button:disabled {
     color: var(--md-muted);
-    min-width: 38px;
-    text-align: center;
-    user-select: none;
+    cursor: default;
+    opacity: 0.55;
+}
+#context-menu button:disabled:hover { background: transparent; color: var(--md-muted); }
+#context-menu .separator {
+    height: 1px;
+    margin: 4px 0;
+    background: var(--md-border);
 }
 
 /* Content Area */
@@ -871,7 +868,7 @@ body {
     padding: 16px;
     overflow-x: auto;
     line-height: 1.5;
-    font-size: 13px;
+    font-size: 0.9em;
     background: transparent;
     color: var(--md-code-basic-fg);
 }
@@ -953,7 +950,6 @@ body {
 
 /* No TOC state */
 body.no-toc #toc-panel { display: none; }
-body.no-toc #toggle-toc-side { display: none; }
 
 /* ====== Scroll Bubble ====== */
 #scroll-bubble {
@@ -984,43 +980,10 @@ body.no-toc #toggle-toc-side { display: none; }
 #scroll-bubble button:hover { background: var(--md-accent); color: #ffffff; opacity: 1; }
 #scroll-bubble button svg { width: 16px; height: 16px; }
 
-/* ====== Theme Menu ====== */
-#theme-btn.active-theme { color: var(--md-accent); border-color: var(--md-accent); }
 </style>
 </head>
 <body class="${hasTOC ? '' : 'no-toc'}">
 <div id="main">
-    <div id="toolbar">
-        <div class="left">
-            <span class="filename">${this.jsonEscape(filename)}</span>
-        </div>
-        <div class="center">
-            <button id="zoom-out" title="Zoom out">
-                <svg viewBox="0 0 16 16" fill="currentColor"><path fill-rule="evenodd" d="M2 7.5a.5.5 0 01.5-.5h8a.5.5 0 010 1h-8a.5.5 0 01-.5-.5z"/></svg>
-            </button>
-            <span class="zoom-val" id="zoom-level">100%</span>
-            <button id="zoom-in" title="Zoom in">
-                <svg viewBox="0 0 16 16" fill="currentColor"><path fill-rule="evenodd" d="M8 2a.5.5 0 01.5.5v5h5a.5.5 0 010 1h-5v5a.5.5 0 01-1 0v-5h-5a.5.5 0 010-1h5v-5A.5.5 0 018 2z"/></svg>
-            </button>
-        </div>
-        <div class="right">
-            <button id="toggle-toc-side" title="Toggle Table of Contents" aria-label="Toggle TOC">
-                <svg viewBox="0 0 16 16" fill="currentColor"><path fill-rule="evenodd" d="M2 3.5a.5.5 0 01.5-.5h11a.5.5 0 010 1h-11a.5.5 0 01-.5-.5zm0 4a.5.5 0 01.5-.5h11a.5.5 0 010 1h-11a.5.5 0 01-.5-.5zm0 4a.5.5 0 01.5-.5h11a.5.5 0 010 1h-11a.5.5 0 01-.5-.5z"/></svg>
-            </button>
-            <button id="refresh-btn" title="Refresh preview">
-                <svg viewBox="0 0 16 16" fill="currentColor"><path fill-rule="evenodd" d="M8 3a5 5 0 104.546 2.914.5.5 0 01.908-.417A6 6 0 118 2v1z"/><path d="M8 4.466V.534a.25.25 0 01.41-.192l2.36 1.966c.12.1.12.284 0 .384L8.41 4.658A.25.25 0 018 4.466z"/></svg>
-            </button>
-            <button id="theme-btn" title="Switch theme (Auto / Light / Dark)">
-                <svg id="theme-icon-auto" viewBox="0 0 16 16" fill="currentColor"><path fill-rule="evenodd" d="M0 2.5A1.5 1.5 0 011.5 1h13A1.5 1.5 0 0116 2.5v9a1.5 1.5 0 01-1.5 1.5h-13A1.5 1.5 0 010 11.5v-9zM1.5 2a.5.5 0 00-.5.5v9a.5.5 0 00.5.5h13a.5.5 0 00.5-.5v-9a.5.5 0 00-.5-.5h-13z"/><path d="M2 3h12v7H2V3z"/></svg>
-                <svg id="theme-icon-light" viewBox="0 0 16 16" fill="currentColor" style="display:none"><path fill-rule="evenodd" d="M8 1.5a.5.5 0 01.5.5v1a.5.5 0 01-1 0V2a.5.5 0 01.5-.5zm4.95 1.55a.5.5 0 010 .707l-.707.707a.5.5 0 11-.707-.707l.707-.707a.5.5 0 01.707 0zm1.55 4.45a.5.5 0 010 .5h-1a.5.5 0 010-1h1a.5.5 0 010 .5zM8 11.5a.5.5 0 01.5.5v1a.5.5 0 01-1 0v-1a.5.5 0 01.5-.5zm-4.95 1.55a.5.5 0 010-.707l.707-.707a.5.5 0 01.707.707l-.707.707a.5.5 0 01-.707 0zM1.5 7.5a.5.5 0 010-.5h1a.5.5 0 010 1h-1a.5.5 0 010-.5zm1.55-4.45a.5.5 0 01.707 0l.707.707a.5.5 0 01-.707.707l-.707-.707a.5.5 0 010-.707zM8 4.5a3.5 3.5 0 100 7 3.5 3.5 0 000-7z"/></svg>
-                <svg id="theme-icon-dark" viewBox="0 0 16 16" fill="currentColor" style="display:none"><path fill-rule="evenodd" d="M6 .278a.768.768 0 01.08.858 7.208 7.208 0 00-.878 3.46c0 4.021 3.278 7.277 7.318 7.277.527 0 1.04-.055 1.533-.16a.787.787 0 01.81.316.733.733 0 01-.031.893A8.349 8.349 0 018.344 16C3.734 16 0 12.286 0 7.71 0 4.266 2.114 1.312 5.124.06A.752.752 0 016 .278z"/></svg>
-            </button>
-            <button id="copy-all" title="Copy Markdown source">
-                <svg viewBox="0 0 16 16" fill="currentColor"><path fill-rule="evenodd" d="M4 1.5h8.5a1 1 0 011 1V12h-1V2.5H4v-1zM2.5 4h8a.5.5 0 01.5.5v9a.5.5 0 01-.5.5h-8a.5.5 0 01-.5-.5v-9a.5.5 0 01.5-.5zM3 5v8h7V5H3z"/></svg>
-            </button>
-        </div>
-    </div>
-
     <div id="content-area">
         <div class="markdown-body">${html}</div>
     </div>
@@ -1035,6 +998,15 @@ body.no-toc #toggle-toc-side { display: none; }
 </div>
 
 <div id="toast"></div>
+
+<div id="context-menu" role="menu" aria-hidden="true">
+    <button type="button" data-action="refresh">Refresh preview</button>
+    <button type="button" data-action="toggle-toc">Toggle contents</button>
+    <button type="button" data-action="zoom-fit">Zoom 100%</button>
+    <div class="separator" aria-hidden="true"></div>
+    <button type="button" data-action="theme">Switch theme</button>
+    <button type="button" data-action="copy-source">Copy Markdown source</button>
+</div>
 
 <div id="scroll-bubble">
     <button id="scroll-top" title="Back to top">
@@ -1053,6 +1025,7 @@ body.no-toc #toggle-toc-side { display: none; }
     var tocPanel = document.getElementById('toc-panel');
     var tocList = document.getElementById('toc-list');
     var contentArea = document.getElementById('content-area');
+    var contextMenu = document.getElementById('context-menu');
     var toast = document.getElementById('toast');
     var toastTimer;
 
@@ -1071,7 +1044,6 @@ body.no-toc #toggle-toc-side { display: none; }
     }
 
     // ====== TOC Toggle ======
-    var toggleTocSideBtn = document.getElementById('toggle-toc-side');
     var scrollBubble = document.getElementById('scroll-bubble');
     var tocWidth = 260;
 
@@ -1080,7 +1052,7 @@ body.no-toc #toggle-toc-side { display: none; }
     }
 
     function updateBubblePosition() {
-        if (tocPanel.classList.contains('collapsed')) {
+        if (document.body.classList.contains('no-toc') || tocPanel.classList.contains('collapsed')) {
             scrollBubble.style.setProperty('--bubble-right', '32px');
         } else {
             var w = getTOCWidth();
@@ -1097,14 +1069,75 @@ body.no-toc #toggle-toc-side { display: none; }
         updateBubblePosition();
     }
 
+    function toggleTOC() {
+        if (document.body.classList.contains('no-toc')) { return; }
+        if (tocPanel.classList.contains('collapsed')) {
+            expandTOC();
+        } else {
+            collapseTOC();
+        }
+    }
+
     updateBubblePosition();
 
-    if (toggleTocSideBtn) {
-        toggleTocSideBtn.addEventListener('click', function() {
-            if (tocPanel.classList.contains('collapsed')) {
-                expandTOC();
-            } else {
-                collapseTOC();
+    // ====== Context Menu ======
+    function hideContextMenu() {
+        if (!contextMenu) { return; }
+        contextMenu.classList.remove('show');
+        contextMenu.setAttribute('aria-hidden', 'true');
+    }
+
+    function showContextMenu(x, y) {
+        if (!contextMenu) { return; }
+        var toggleItem = contextMenu.querySelector('[data-action="toggle-toc"]');
+        if (toggleItem) {
+            toggleItem.disabled = document.body.classList.contains('no-toc');
+        }
+
+        contextMenu.classList.add('show');
+        contextMenu.setAttribute('aria-hidden', 'false');
+
+        var rect = contextMenu.getBoundingClientRect();
+        var left = Math.min(x, window.innerWidth - rect.width - 8);
+        var top = Math.min(y, window.innerHeight - rect.height - 8);
+        contextMenu.style.left = Math.max(8, left) + 'px';
+        contextMenu.style.top = Math.max(8, top) + 'px';
+    }
+
+    document.addEventListener('contextmenu', function(e) {
+        if (e.target.closest('#context-menu')) { return; }
+        if (e.target.closest('.markdown-body pre')) { return; }
+        e.preventDefault();
+        showContextMenu(e.clientX, e.clientY);
+    });
+
+    document.addEventListener('click', function(e) {
+        if (contextMenu && e.target.closest('#context-menu')) { return; }
+        hideContextMenu();
+    });
+
+    document.addEventListener('keydown', function(e) {
+        if (e.key === 'Escape') {
+            hideContextMenu();
+        }
+    });
+
+    if (contextMenu) {
+        contextMenu.addEventListener('click', function(e) {
+            var item = e.target.closest('[data-action]');
+            if (!item || item.disabled) { return; }
+            var action = item.getAttribute('data-action');
+            hideContextMenu();
+            if (action === 'refresh') {
+                refreshPreview();
+            } else if (action === 'toggle-toc') {
+                toggleTOC();
+            } else if (action === 'zoom-fit') {
+                resetZoom();
+            } else if (action === 'theme') {
+                cycleTheme();
+            } else if (action === 'copy-source') {
+                copyMarkdownSource();
             }
         });
     }
@@ -1272,9 +1305,8 @@ body.no-toc #toggle-toc-side { display: none; }
             var sourceEl = document.getElementById('markdown-source');
             if (sourceEl) { sourceEl.textContent = msg.rawMarkdown; }
 
-            // Update filename
-            var fnEl = document.querySelector('#toolbar .filename');
-            if (fnEl) { fnEl.textContent = msg.filename; }
+            document.body.classList.toggle('no-toc', !msg.tocItems || msg.tocItems.length === 0);
+            updateBubblePosition();
 
             // Rebuild TOC
             headingLines = {};
@@ -1328,8 +1360,59 @@ body.no-toc #toggle-toc-side { display: none; }
         }).join('');
     }
 
+    function copyText(text, onCopied) {
+        function done() {
+            if (onCopied) { onCopied(); }
+        }
+
+        function fallback() {
+            if (vscodeApi) {
+                vscodeApi.postMessage({ command: 'copy', text: text });
+            }
+            done();
+        }
+
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+            navigator.clipboard.writeText(text).then(done).catch(fallback);
+        } else {
+            fallback();
+        }
+    }
+
+    function getCodeText(pre) {
+        var code = pre.querySelector('code');
+        return code ? code.textContent || '' : pre.textContent || '';
+    }
+
+    function markCodeButtonCopied(btn) {
+        btn.innerHTML = checkIcon;
+        btn.classList.add('copied');
+        setTimeout(function() {
+            btn.innerHTML = copyIcon;
+            btn.classList.remove('copied');
+        }, 2000);
+    }
+
+    function copyCodeFromPre(pre, showCopiedToast) {
+        copyText(getCodeText(pre), function() {
+            if (showCopiedToast) {
+                showToast('Code copied to clipboard');
+            }
+        });
+    }
+
     function attachCopyButtons() {
         document.querySelectorAll('.markdown-body pre').forEach(function(pre) {
+            if (!pre.dataset.contextCopyAttached) {
+                pre.dataset.contextCopyAttached = 'true';
+                pre.addEventListener('contextmenu', function(e) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    hideContextMenu();
+                    copyCodeFromPre(pre, true);
+                });
+            }
+
             if (pre.querySelector('.copy-code-btn')) { return; }
             var btn = document.createElement('button');
             btn.className = 'copy-code-btn';
@@ -1337,25 +1420,8 @@ body.no-toc #toggle-toc-side { display: none; }
             btn.title = 'Copy code';
             btn.addEventListener('click', function(e) {
                 e.stopPropagation();
-                var code = pre.querySelector('code');
-                var text = code ? code.textContent || '' : pre.textContent || '';
-                navigator.clipboard.writeText(text).then(function() {
-                    btn.innerHTML = checkIcon;
-                    btn.classList.add('copied');
-                    setTimeout(function() {
-                        btn.innerHTML = copyIcon;
-                        btn.classList.remove('copied');
-                    }, 2000);
-                }).catch(function() {
-                    if (vscodeApi) {
-                        vscodeApi.postMessage({ command: 'copy', text: text });
-                        btn.innerHTML = checkIcon;
-                        btn.classList.add('copied');
-                        setTimeout(function() {
-                            btn.innerHTML = copyIcon;
-                            btn.classList.remove('copied');
-                        }, 2000);
-                    }
+                copyText(getCodeText(pre), function() {
+                    markCodeButtonCopied(btn);
                 });
             });
             pre.appendChild(btn);
@@ -1384,19 +1450,11 @@ body.no-toc #toggle-toc-side { display: none; }
     attachCopyButtons();
 
     // ====== Copy All ======
-    var copyAllBtn = document.getElementById('copy-all');
-    if (copyAllBtn) {
-        copyAllBtn.addEventListener('click', function() {
-            var sourceEl = document.getElementById('markdown-source');
-            var text = sourceEl ? sourceEl.textContent : '';
-            navigator.clipboard.writeText(text).then(function() {
-                showToast('Markdown source copied to clipboard');
-            }).catch(function() {
-                if (vscodeApi) {
-                    vscodeApi.postMessage({ command: 'copy', text: text });
-                }
-                showToast('Markdown source copied to clipboard');
-            });
+    function copyMarkdownSource() {
+        var sourceEl = document.getElementById('markdown-source');
+        var text = sourceEl ? sourceEl.textContent : '';
+        copyText(text, function() {
+            showToast('Markdown source copied to clipboard');
         });
     }
 
@@ -1406,16 +1464,6 @@ body.no-toc #toggle-toc-side { display: none; }
     var initialTheme = '${this.jsonEscape(initialTheme)}';
     var currentTheme = themes.indexOf(initialTheme);
     if (currentTheme < 0) { currentTheme = 0; }
-    var themeBtn = document.getElementById('theme-btn');
-    var iconAuto = document.getElementById('theme-icon-auto');
-    var iconLight = document.getElementById('theme-icon-light');
-    var iconDark = document.getElementById('theme-icon-dark');
-
-    function showThemeIcon(theme) {
-        iconAuto.style.display = theme === 'default' ? '' : 'none';
-        iconLight.style.display = theme === 'light' ? '' : 'none';
-        iconDark.style.display = theme === 'dark' ? '' : 'none';
-    }
 
     function applyTheme(theme) {
         if (theme === 'default') {
@@ -1423,54 +1471,38 @@ body.no-toc #toggle-toc-side { display: none; }
         } else {
             document.body.setAttribute('data-theme', theme);
         }
-        showThemeIcon(theme);
-        themeBtn.title = 'Theme: ' + themeLabels[themes.indexOf(theme)];
+    }
+
+    function cycleTheme() {
+        currentTheme = (currentTheme + 1) % themes.length;
+        var theme = themes[currentTheme];
+        applyTheme(theme);
+        if (vscodeApi) { vscodeApi.postMessage({ command: 'set-theme', theme: theme }); }
+        showToast('Theme: ' + themeLabels[currentTheme]);
     }
 
     applyTheme(themes[currentTheme]);
 
-    if (themeBtn) {
-        themeBtn.addEventListener('click', function() {
-            currentTheme = (currentTheme + 1) % themes.length;
-            var theme = themes[currentTheme];
-            applyTheme(theme);
-            if (vscodeApi) { vscodeApi.postMessage({ command: 'set-theme', theme: theme }); }
-        });
-    }
-
     // ====== Refresh ======
-    var refreshBtn = document.getElementById('refresh-btn');
-    if (refreshBtn) {
-        refreshBtn.addEventListener('click', function() {
-            if (vscodeApi) {
-                vscodeApi.postMessage({ command: 'refresh' });
-            }
-        });
+    function refreshPreview() {
+        if (vscodeApi) {
+            vscodeApi.postMessage({ command: 'refresh' });
+        }
     }
 
     // ====== Zoom ======
     var zoomLevel = 100;
-    var zoomValEl = document.getElementById('zoom-level');
     var markdownBody = document.querySelector('.markdown-body');
 
     function applyZoom() {
+        if (!markdownBody) { return; }
         markdownBody.style.fontSize = zoomLevel + '%';
-        zoomValEl.textContent = zoomLevel + '%';
     }
 
-    document.getElementById('zoom-in').addEventListener('click', function() {
-        if (zoomLevel < 200) {
-            zoomLevel = zoomLevel + 10;
-            applyZoom();
-        }
-    });
-
-    document.getElementById('zoom-out').addEventListener('click', function() {
-        if (zoomLevel > 50) {
-            zoomLevel = zoomLevel - 10;
-            applyZoom();
-        }
-    });
+    function resetZoom() {
+        zoomLevel = 100;
+        applyZoom();
+    }
 
     // ====== Ctrl + Wheel Zoom ======
     contentArea.addEventListener('wheel', function(e) {
