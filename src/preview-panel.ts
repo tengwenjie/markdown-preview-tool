@@ -94,28 +94,20 @@ export class MarkdownPreviewPanel {
                 if (message.command === 'copy') {
                     vscode.env.clipboard.writeText(message.text);
                 } else if (message.command === 'refresh') {
-                    this.update(this.rawMarkdown, this.currentFile, true);
+                    void this.refreshFromSource();
                 } else if (message.command === 'set-theme') {
                     this.currentTheme = message.theme;
                 } else if (message.command === 'scroll-editor') {
-                    const editor = vscode.window.visibleTextEditors.find(
-                        e => e.document.languageId === 'markdown'
-                    );
+                    const editor = this.findVisibleMarkdownEditor();
                     if (editor) {
                         const line = Math.max(0, Math.min(message.line - 1, editor.document.lineCount - 1));
                         const position = new vscode.Position(line, 0);
                         const version = ++this.syncVersion;
                         editor.selection = new vscode.Selection(position, position);
-                        vscode.window.showTextDocument(editor.document, {
-                            viewColumn: editor.viewColumn,
-                            preserveFocus: true,
-                            preview: true,
-                        }).then(() => {
-                            editor.revealRange(
-                                new vscode.Range(position, position),
-                                vscode.TextEditorRevealType.InCenter
-                            );
-                        });
+                        editor.revealRange(
+                            new vscode.Range(position, position),
+                            vscode.TextEditorRevealType.InCenter
+                        );
                         setTimeout(() => {
                             if (this.syncVersion === version) {
                                 this.syncVersion = 0;
@@ -139,6 +131,23 @@ export class MarkdownPreviewPanel {
             null,
             this.disposables
         );
+    }
+
+    private findVisibleMarkdownEditor(): vscode.TextEditor | undefined {
+        const markdownEditors = vscode.window.visibleTextEditors.filter(
+            (editor) => editor.document.languageId === 'markdown'
+        );
+
+        if (this.currentFile) {
+            const matchingEditor = markdownEditors.find(
+                (editor) => editor.document.fileName === this.currentFile
+            );
+            if (matchingEditor) {
+                return matchingEditor;
+            }
+        }
+
+        return markdownEditors[0];
     }
 
     private syncEditorToPreview(editor: vscode.TextEditor) {
@@ -223,6 +232,150 @@ export class MarkdownPreviewPanel {
         }
     }
 
+    private async refreshFromSource() {
+        const openDocument = this.currentFile
+            ? vscode.workspace.textDocuments.find(
+                (document) => document.fileName === this.currentFile
+            )
+            : undefined;
+
+        if (openDocument) {
+            if (openDocument.isDirty || openDocument.isUntitled) {
+                this.update(openDocument.getText(), openDocument.fileName, true);
+                return;
+            }
+
+            try {
+                const bytes = await vscode.workspace.fs.readFile(openDocument.uri);
+                this.update(Buffer.from(bytes).toString('utf8'), openDocument.fileName, true);
+                return;
+            } catch {
+                this.update(openDocument.getText(), openDocument.fileName, true);
+                return;
+            }
+        }
+
+        if (this.currentFile) {
+            try {
+                const uri = vscode.Uri.file(this.currentFile);
+                const bytes = await vscode.workspace.fs.readFile(uri);
+                this.update(Buffer.from(bytes).toString('utf8'), this.currentFile, true);
+                return;
+            } catch {
+                // Fall back to the active editor below.
+            }
+        }
+
+        this.updateFromActiveEditor();
+    }
+
+    private escapeHtml(value: string): string {
+        return value.replace(/[&<>"]/g, (char) => {
+            switch (char) {
+                case '&': return '&amp;';
+                case '<': return '&lt;';
+                case '>': return '&gt;';
+                case '"': return '&quot;';
+                default: return char;
+            }
+        });
+    }
+
+    private findLineEnd(value: string, start: number): number {
+        const lineEnd = value.indexOf('\n', start);
+        return lineEnd === -1 ? value.length : lineEnd;
+    }
+
+    private isLineLeadingHash(value: string, index: number): boolean {
+        for (let i = index - 1; i >= 0; i--) {
+            const char = value[i];
+            if (char === '\n' || char === '\r') {
+                return true;
+            }
+            if (char !== ' ' && char !== '\t') {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private getCodeCommentEnd(value: string, index: number): number | undefined {
+        if (value.startsWith('<!--', index)) {
+            const end = value.indexOf('-->', index + 4);
+            return end === -1 ? value.length : end + 3;
+        }
+
+        if (value.startsWith('/*', index)) {
+            const end = value.indexOf('*/', index + 2);
+            return end === -1 ? value.length : end + 2;
+        }
+
+        if (value.startsWith('//', index) && value[index - 1] !== ':') {
+            return this.findLineEnd(value, index);
+        }
+
+        if (value[index] === '#') {
+            const previous = value[index - 1];
+            const next = value[index + 1];
+            const isInlineComment = (previous === ' ' || previous === '\t') &&
+                (next === ' ' || next === '\t' || next === undefined);
+            if (this.isLineLeadingHash(value, index) || isInlineComment) {
+                return this.findLineEnd(value, index);
+            }
+        }
+
+        return undefined;
+    }
+
+    private renderCodeWithComments(value: string): string {
+        let html = '';
+        let index = 0;
+        let quote: string | undefined;
+
+        while (index < value.length) {
+            const char = value[index];
+
+            if (quote) {
+                html += this.escapeHtml(char);
+                if (char === '\\' && index + 1 < value.length) {
+                    html += this.escapeHtml(value[index + 1]);
+                    index += 2;
+                    continue;
+                }
+                if (char === quote) {
+                    quote = undefined;
+                }
+                index++;
+                continue;
+            }
+
+            const commentEnd = this.getCodeCommentEnd(value, index);
+            if (commentEnd !== undefined) {
+                html += `<span class="code-comment">${this.escapeHtml(value.slice(index, commentEnd))}</span>`;
+                index = commentEnd;
+                continue;
+            }
+
+            if (char === '"' || char === '\'' || char === '`') {
+                quote = char;
+            }
+            html += this.escapeHtml(char);
+            index++;
+        }
+
+        return html;
+    }
+
+    private renderCodeBlock(content: string, language: string = ''): string {
+        const sanitizedLanguage = language.replace(/[^\w-]/g, '');
+        const classAttribute = sanitizedLanguage
+            ? ` class="language-${this.escapeHtml(sanitizedLanguage)}"`
+            : '';
+
+        return `<pre><code${classAttribute}>${this.renderCodeWithComments(content)}</code></pre>\n`;
+    }
+
     private createMarkdownIt(): MarkdownIt {
         const md = MarkdownIt({
             html: true,
@@ -244,6 +397,16 @@ export class MarkdownPreviewPanel {
                 token.attrSet('id', id);
             }
             return defaultHeadingOpen(tokens, idx, options, _env, self);
+        };
+
+        md.renderer.rules.fence = (tokens, idx) => {
+            const token = tokens[idx];
+            const language = token.info.trim().split(/\s+/)[0] || '';
+            return this.renderCodeBlock(token.content, language);
+        };
+
+        md.renderer.rules.code_block = (tokens, idx) => {
+            return this.renderCodeBlock(tokens[idx].content);
         };
 
         return md;
@@ -387,6 +550,8 @@ body {
     --md-table-stripe: var(--vscode-textBlockQuote-background);
     --md-heading-border: var(--vscode-panel-border);
     --md-code-fg: var(--vscode-editor-foreground);
+    --md-code-basic-fg: #006400;
+    --md-code-comment-fg: #808080;
     --md-input-accent: var(--vscode-focusBorder);
     --md-sidebar-title-fg: var(--vscode-sideBarTitle-foreground);
     --md-toggle-hover-bg: var(--vscode-toolbar-hoverBackground);
@@ -422,6 +587,8 @@ body {
     --md-table-stripe: #f6f8fa;
     --md-heading-border: #d0d7de;
     --md-code-fg: #1f2328;
+    --md-code-basic-fg: #006400;
+    --md-code-comment-fg: #808080;
     --md-input-accent: #0969da;
     --md-sidebar-title-fg: #656d76;
     --md-toggle-hover-bg: #eaeef2;
@@ -457,6 +624,8 @@ body {
     --md-table-stripe: #161b22;
     --md-heading-border: #30363d;
     --md-code-fg: #c9d1d9;
+    --md-code-basic-fg: #006400;
+    --md-code-comment-fg: #8b949e;
     --md-input-accent: #58a6ff;
     --md-sidebar-title-fg: #8b949e;
     --md-toggle-hover-bg: #21262d;
@@ -485,7 +654,14 @@ body {
     flex-shrink: 0;
     position: relative;
 }
-#toc-panel.collapsed { width: 0 !important; opacity: 0; border-left: none; }
+#toc-panel.collapsed {
+    display: none;
+    width: 0 !important;
+    min-width: 0 !important;
+    max-width: 0 !important;
+    flex-basis: 0 !important;
+    border-left: none;
+}
 
 #toc-resize-handle {
     position: absolute;
@@ -639,9 +815,9 @@ body {
 #content-area {
     flex: 1;
     overflow-y: auto;
-    padding: 32px 48px;
-    max-width: 900px;
-    margin: 0 auto;
+    padding: 32px 5px;
+    max-width: none;
+    margin: 0;
     width: 100%;
 }
 #content-area::-webkit-scrollbar { width: 6px; }
@@ -697,7 +873,9 @@ body {
     line-height: 1.5;
     font-size: 13px;
     background: transparent;
+    color: var(--md-code-basic-fg);
 }
+.markdown-body pre code .code-comment { color: var(--md-code-comment-fg); font-style: italic; }
 .markdown-body pre::-webkit-scrollbar { height: 4px; }
 .markdown-body pre::-webkit-scrollbar-thumb { background: var(--md-scrollbar); border-radius: 2px; }
 
