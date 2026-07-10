@@ -403,7 +403,18 @@ export class MarkdownPreviewPanel {
             const token = tokens[idx];
             const language = token.info.trim().split(/\s+/)[0] || '';
             if (language === 'mermaid') {
-                return `<div class="mermaid">${this.escapeHtml(token.content)}</div>\n`;
+                const escapedContent = this.escapeHtml(token.content);
+                return `<div class="mermaid-block">`
+                    + `<div class="mermaid-toggle" title="View mode">`
+                    + `<span class="mermaid-slider graph">`
+                    + `<span class="mermaid-slider-knob"></span>`
+                    + `<span class="mermaid-slider-label graph-label">Graph</span>`
+                    + `<span class="mermaid-slider-label source-label">Source</span>`
+                    + `</span>`
+                    + `</div>`
+                    + `<div class="mermaid-graph"><div class="mermaid">${escapedContent}</div></div>`
+                    + `<div class="mermaid-context" style="display:none">${this.renderCodeBlock(token.content, 'mermaid')}</div>`
+                    + `</div>\n`;
             }
             return this.renderCodeBlock(token.content, language);
         };
@@ -906,6 +917,81 @@ body {
 .copy-code-btn:hover { background: var(--md-btn-hover-bg); color: var(--md-fg); }
 .copy-code-btn.copied { background: var(--md-accent); color: #ffffff; border-color: var(--md-accent); }
 
+.mermaid-block {
+    position: relative;
+    margin: 0 0 16px;
+    border-radius: 6px;
+    background: #fff9e6;
+}
+.mermaid-block .mermaid {
+    display: flex;
+    justify-content: center;
+    padding: 16px;
+}
+.mermaid-block .mermaid svg {
+    max-width: 100%;
+    height: auto;
+}
+.mermaid-block .mermaid-context pre {
+    margin: 0;
+    background: transparent;
+}
+.mermaid-block .mermaid-context pre code {
+    color: var(--md-code-basic-fg);
+    background: transparent;
+}
+.mermaid-toggle {
+    position: absolute;
+    top: 6px;
+    right: 6px;
+    display: flex;
+    gap: 4px;
+    z-index: 5;
+    opacity: 0;
+    transition: opacity 0.15s;
+}
+.mermaid-block:hover .mermaid-toggle { opacity: 1; }
+.mermaid-slider {
+    display: inline-flex;
+    align-items: center;
+    position: relative;
+    height: 26px;
+    border-radius: 13px;
+    background: #fff3cd;
+    border: 1px solid #e6d89c;
+    cursor: pointer;
+    user-select: none;
+    overflow: hidden;
+}
+.mermaid-slider-knob {
+    position: absolute;
+    top: 2px;
+    left: 2px;
+    width: calc(50% - 2px);
+    height: 20px;
+    border-radius: 11px;
+    background: var(--md-accent);
+    transition: transform 0.2s ease;
+}
+.mermaid-slider.source .mermaid-slider-knob {
+    transform: translateX(calc(100% + 2px));
+}
+.mermaid-slider-label {
+    position: relative;
+    flex: 1;
+    text-align: center;
+    font-size: 11px;
+    font-weight: 600;
+    padding: 0 9px;
+    min-width: 40px;
+    line-height: 26px;
+    z-index: 1;
+    transition: color 0.2s;
+    color: var(--md-muted);
+}
+.mermaid-slider.graph .graph-label { color: #ffffff; }
+.mermaid-slider.source .source-label { color: #ffffff; }
+
 .markdown-body table {
     border-collapse: collapse;
     margin: 0 0 16px;
@@ -1330,6 +1416,7 @@ body.no-toc #toc-panel { display: none; }
 
             // Re-attach copy buttons and observer
             attachCopyButtons();
+            setupMermaidToggles();
             if (observer) { observer.disconnect(); }
             if ('IntersectionObserver' in window && headingIds.length > 0) {
                 observer = new IntersectionObserver(function() {
@@ -1460,6 +1547,38 @@ body.no-toc #toc-panel { display: none; }
 
     // ====== Copy Code Block ======
     attachCopyButtons();
+
+    // ====== Mermaid Toggle ======
+    function setupMermaidToggles() {
+        document.querySelectorAll('.mermaid-block').forEach(function(block) {
+            if (block.dataset.mermaidToggleReady) { return; }
+            block.dataset.mermaidToggleReady = '1';
+            var slider = block.querySelector('.mermaid-slider');
+            if (!slider) { return; }
+            slider.addEventListener('click', function(e) {
+                e.stopPropagation();
+                var isGraph = slider.classList.contains('graph');
+                var graphEl = block.querySelector('.mermaid-graph');
+                var contextEl = block.querySelector('.mermaid-context');
+
+                if (isGraph) {
+                    slider.classList.remove('graph');
+                    slider.classList.add('source');
+                    graphEl.style.display = 'none';
+                    contextEl.style.display = '';
+                } else {
+                    slider.classList.remove('source');
+                    slider.classList.add('graph');
+                    graphEl.style.display = '';
+                    contextEl.style.display = 'none';
+                    if (typeof __mermaidRender === 'function') {
+                        __mermaidRender(graphEl);
+                    }
+                }
+            });
+        });
+    }
+    setupMermaidToggles();
 
     // ====== Copy All ======
     function copyMarkdownSource() {

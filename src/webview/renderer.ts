@@ -6,8 +6,9 @@ mermaid.initialize({
     securityLevel: 'loose',
 });
 
-async function renderMermaidDiagrams(): Promise<void> {
-    const elements = document.querySelectorAll<HTMLElement>('.mermaid');
+async function renderMermaidDiagrams(container?: HTMLElement): Promise<void> {
+    const root: HTMLElement | Document = container || document;
+    const elements = root.querySelectorAll<HTMLElement>('.mermaid');
     if (elements.length === 0) {
         return;
     }

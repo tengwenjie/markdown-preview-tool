@@ -14,7 +14,7 @@ A VS Code extension that provides an enhanced Markdown preview with a navigable 
 - **Zoom** — `Ctrl/Cmd + Scroll` zooms the full preview, including code blocks (50%–200%); right-click menu can reset to 100%
 - **Context Menu** — Right-click the preview to refresh, toggle TOC, reset zoom, switch theme, or copy Markdown source
 - **Copy** — Hover over code blocks for a copy icon; right-click a code block to copy it immediately
-- **Mermaid Diagrams** — Render `mermaid` fenced code blocks as diagrams (flowchart, sequence, gantt, class, state, pie, etc.)
+- **Mermaid Diagrams** — Render `mermaid` fenced code blocks as diagrams with a slider toggle to switch between Graph and Source views per block
 - **Code Styling** — Code blocks use dark green base text and gray italic comments
 - **Scroll Quick Nav** — Floating bubble buttons in the bottom-right to jump to top/bottom
 - **Refresh** — Right-click menu refresh action manually syncs preview with latest Markdown content
