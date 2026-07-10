@@ -402,6 +402,9 @@ export class MarkdownPreviewPanel {
         md.renderer.rules.fence = (tokens, idx) => {
             const token = tokens[idx];
             const language = token.info.trim().split(/\s+/)[0] || '';
+            if (language === 'mermaid') {
+                return `<div class="mermaid">${this.escapeHtml(token.content)}</div>\n`;
+            }
             return this.renderCodeBlock(token.content, language);
         };
 
@@ -506,6 +509,10 @@ body {
         const hasTOC = tocTree.length > 0;
         const tocJSON = JSON.stringify(tocItems);
         const safeMarkdown = JSON.stringify(rawMarkdown);
+
+        const webviewScriptUri = this.panel.webview.asWebviewUri(
+            vscode.Uri.joinPath(this.extensionUri, 'dist', 'webview.js')
+        );
 
         const tocListHTML = tocTree
             .map((node) => this.renderTOCNode(node))
@@ -1019,6 +1026,7 @@ body.no-toc #toc-panel { display: none; }
 
 <script type="text/markdown-source" id="markdown-source">${safeMarkdown}</script>
 
+<script src="${webviewScriptUri}"></script>
 <script>
 (function() {
     var tocItems = ${tocJSON};
@@ -1346,6 +1354,10 @@ body.no-toc #toc-panel { display: none; }
                 });
                 activeId = savedHeading;
             }
+
+            if (typeof __mermaidRender === 'function') {
+                __mermaidRender();
+            }
         }
     });
 
@@ -1545,6 +1557,10 @@ body.no-toc #toc-panel { display: none; }
     document.getElementById('scroll-bottom').addEventListener('click', function() {
         fastScrollTo(contentArea.scrollHeight);
     });
+
+    if (typeof __mermaidRender === 'function') {
+        __mermaidRender();
+    }
 })();
 </script>
 </body>
