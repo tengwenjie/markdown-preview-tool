@@ -405,12 +405,17 @@ export class MarkdownPreviewPanel {
             if (language === 'mermaid') {
                 const escapedContent = this.escapeHtml(token.content);
                 return `<div class="mermaid-block">`
-                    + `<div class="mermaid-toggle" title="View mode">`
-                    + `<span class="mermaid-slider graph">`
+                    + `<div class="mermaid-toolbar">`
+                    + `<span class="mermaid-slider graph" title="View mode">`
                     + `<span class="mermaid-slider-knob"></span>`
                     + `<span class="mermaid-slider-label graph-label">Graph</span>`
                     + `<span class="mermaid-slider-label source-label">Source</span>`
                     + `</span>`
+                    + `<span class="mermaid-tb-sep"></span>`
+                    + `<button type="button" class="mz-btn mz-out" title="Zoom out" disabled>&minus;</button>`
+                    + `<span class="mz-label">100%</span>`
+                    + `<button type="button" class="mz-btn mz-in" title="Zoom in">&plus;</button>`
+                    + `<button type="button" class="mz-btn mz-reset" title="Reset zoom">&#8634;</button>`
                     + `</div>`
                     + `<div class="mermaid-graph"><div class="mermaid">${escapedContent}</div></div>`
                     + `<div class="mermaid-context" style="display:none">${this.renderCodeBlock(token.content, 'mermaid')}</div>`
@@ -940,17 +945,25 @@ body {
     color: var(--md-code-basic-fg);
     background: transparent;
 }
-.mermaid-toggle {
+.mermaid-toolbar {
     position: absolute;
     top: 6px;
     right: 6px;
     display: flex;
+    align-items: center;
     gap: 4px;
     z-index: 5;
     opacity: 0;
     transition: opacity 0.15s;
 }
-.mermaid-block:hover .mermaid-toggle { opacity: 1; }
+.mermaid-block:hover .mermaid-toolbar { opacity: 0.55; }
+.mermaid-toolbar:hover { opacity: 1 !important; }
+.mermaid-tb-sep {
+    width: 1px;
+    height: 18px;
+    background: var(--md-border);
+    flex-shrink: 0;
+}
 .mermaid-slider {
     display: inline-flex;
     align-items: center;
@@ -991,6 +1004,34 @@ body {
 }
 .mermaid-slider.graph .graph-label { color: #ffffff; }
 .mermaid-slider.source .source-label { color: #ffffff; }
+
+/* Mermaid Zoom Controls */
+.mz-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 24px;
+    height: 24px;
+    border: none;
+    border-radius: 4px;
+    background: var(--md-toolbar-bg);
+    color: var(--md-toolbar-fg);
+    cursor: pointer;
+    padding: 0;
+    font-size: 14px;
+    line-height: 1;
+}
+.mz-btn:hover { background: var(--md-btn-hover-bg); color: var(--md-fg); }
+.mz-btn:disabled { opacity: 0.3; cursor: default; }
+.mz-btn:disabled:hover { background: var(--md-toolbar-bg); color: var(--md-toolbar-fg); }
+.mz-label {
+    min-width: 34px;
+    text-align: center;
+    font-size: 11px;
+    color: var(--md-toolbar-fg);
+    user-select: none;
+    line-height: 24px;
+}
 
 .markdown-body table {
     border-collapse: collapse;
@@ -1035,6 +1076,26 @@ body {
     pointer-events: none;
 }
 #toast.show { transform: translateX(-50%) translateY(0); }
+
+/* ====== Zoom Indicator ====== */
+#zoom-indicator {
+    position: fixed;
+    background: rgba(0,0,0,0.45);
+    color: #ffffff;
+    padding: 16px 32px;
+    border-radius: 12px;
+    font-size: 28px;
+    font-weight: 600;
+    opacity: 0;
+    pointer-events: none;
+    z-index: 998;
+    transition: opacity 0.25s ease, transform 0.25s ease;
+    transform: translate(-50%, -50%) scale(0.8);
+}
+#zoom-indicator.show {
+    opacity: 1;
+    transform: translate(-50%, -50%) scale(1);
+}
 
 /* Responsive: auto-collapse TOC on narrow width */
 @media (max-width: 720px) {
@@ -1091,6 +1152,7 @@ body.no-toc #toc-panel { display: none; }
 </div>
 
 <div id="toast"></div>
+<div id="zoom-indicator">100%</div>
 
 <div id="context-menu" role="menu" aria-hidden="true">
     <button type="button" data-action="refresh">Refresh preview</button>
@@ -1554,28 +1616,60 @@ body.no-toc #toc-panel { display: none; }
             if (block.dataset.mermaidToggleReady) { return; }
             block.dataset.mermaidToggleReady = '1';
             var slider = block.querySelector('.mermaid-slider');
-            if (!slider) { return; }
-            slider.addEventListener('click', function(e) {
-                e.stopPropagation();
-                var isGraph = slider.classList.contains('graph');
-                var graphEl = block.querySelector('.mermaid-graph');
-                var contextEl = block.querySelector('.mermaid-context');
+            if (slider) {
+                slider.addEventListener('click', function(e) {
+                    e.stopPropagation();
+                    var isGraph = slider.classList.contains('graph');
+                    var graphEl = block.querySelector('.mermaid-graph');
+                    var contextEl = block.querySelector('.mermaid-context');
 
-                if (isGraph) {
-                    slider.classList.remove('graph');
-                    slider.classList.add('source');
-                    graphEl.style.display = 'none';
-                    contextEl.style.display = '';
-                } else {
-                    slider.classList.remove('source');
-                    slider.classList.add('graph');
-                    graphEl.style.display = '';
-                    contextEl.style.display = 'none';
-                    if (typeof __mermaidRender === 'function') {
-                        __mermaidRender(graphEl);
+                    if (isGraph) {
+                        slider.classList.remove('graph');
+                        slider.classList.add('source');
+                        graphEl.style.display = 'none';
+                        contextEl.style.display = '';
+                    } else {
+                        slider.classList.remove('source');
+                        slider.classList.add('graph');
+                        graphEl.style.display = '';
+                        contextEl.style.display = 'none';
+                        if (typeof __mermaidRender === 'function') {
+                            __mermaidRender(graphEl);
+                        }
                     }
-                }
-            });
+                });
+            }
+
+            // ====== Mermaid Zoom ======
+            var zoomLevel = 100;
+            var graphEl = block.querySelector('.mermaid-graph');
+            var toolbar = block.querySelector('.mermaid-toolbar');
+            var inBtn = block.querySelector('.mz-in');
+            var outBtn = block.querySelector('.mz-out');
+            var resetBtn = block.querySelector('.mz-reset');
+            var label = block.querySelector('.mz-label');
+
+            function applyMermaidZoom() {
+                if (!graphEl) { return; }
+                zoomLevel = Math.max(50, Math.min(300, Math.round(zoomLevel / 10) * 10));
+                graphEl.style.zoom = (zoomLevel / 100).toString();
+                if (outBtn) { outBtn.disabled = zoomLevel <= 50; }
+                if (inBtn) { inBtn.disabled = zoomLevel >= 300; }
+                if (label) { label.textContent = zoomLevel + '%'; }
+            }
+
+            if (inBtn) { inBtn.addEventListener('click', function(e) { e.stopPropagation(); zoomLevel += 10; applyMermaidZoom(); }); }
+            if (outBtn) { outBtn.addEventListener('click', function(e) { e.stopPropagation(); zoomLevel -= 10; applyMermaidZoom(); }); }
+            if (resetBtn) { resetBtn.addEventListener('click', function(e) { e.stopPropagation(); zoomLevel = 100; applyMermaidZoom(); }); }
+            if (toolbar) {
+                toolbar.addEventListener('wheel', function(e) {
+                    if (e.ctrlKey || e.metaKey) {
+                        e.preventDefault();
+                        if (e.deltaY < 0) { zoomLevel += 10; } else { zoomLevel -= 10; }
+                        applyMermaidZoom();
+                    }
+                }, { passive: false });
+            }
         });
     }
     setupMermaidToggles();
@@ -1624,6 +1718,21 @@ body.no-toc #toc-panel { display: none; }
     // ====== Zoom ======
     var zoomLevel = 100;
     var markdownBody = document.querySelector('.markdown-body');
+    var zoomIndicator = document.getElementById('zoom-indicator');
+    var zoomIndicatorTimer;
+
+    function showZoomIndicator() {
+        if (!zoomIndicator) { return; }
+        zoomIndicator.textContent = zoomLevel + '%';
+        var rect = contentArea.getBoundingClientRect();
+        zoomIndicator.style.left = (rect.left + rect.width / 2) + 'px';
+        zoomIndicator.style.top = (rect.top + rect.height / 2) + 'px';
+        zoomIndicator.classList.add('show');
+        clearTimeout(zoomIndicatorTimer);
+        zoomIndicatorTimer = setTimeout(function() {
+            zoomIndicator.classList.remove('show');
+        }, 1000);
+    }
 
     function applyZoom() {
         if (!markdownBody) { return; }
@@ -1645,6 +1754,7 @@ body.no-toc #toc-panel { display: none; }
                 zoomLevel = zoomLevel - 10;
             }
             applyZoom();
+            showZoomIndicator();
         }
     }, { passive: false });
 
