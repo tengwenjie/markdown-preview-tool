@@ -4,6 +4,10 @@ mermaid.initialize({
     startOnLoad: false,
     theme: 'default',
     securityLevel: 'loose',
+    // Render labels as native SVG <text> instead of <foreignObject> HTML.
+    // foreignObject taints the canvas, which blocks exporting the diagram as PNG.
+    htmlLabels: false,
+    flowchart: { htmlLabels: false },
 });
 
 async function renderMermaidDiagrams(container?: HTMLElement): Promise<void> {

@@ -1,6 +1,6 @@
 # Markdown Preview Tool
 
-A VS Code extension that provides an enhanced Markdown preview with a navigable table of contents, three-way sync, context-menu actions, zoom, theme switching, and code copy helpers.
+A VS Code extension that provides an enhanced Markdown preview with a navigable table of contents, three-way sync, context-menu actions, zoom, theme switching, interactive Mermaid diagrams, and code copy helpers.
 
 ## Features
 
@@ -14,7 +14,10 @@ A VS Code extension that provides an enhanced Markdown preview with a navigable 
 - **Zoom** — `Ctrl/Cmd + Scroll` zooms the full preview, including code blocks (50%–200%); right-click menu can reset to 100%
 - **Context Menu** — Right-click the preview to refresh, toggle TOC, reset zoom, switch theme, or copy Markdown source
 - **Copy** — Hover over code blocks for a copy icon; right-click a code block to copy it immediately
-- **Mermaid Diagrams** — Render `mermaid` fenced code blocks as diagrams with a slider toggle to switch between Graph and Source views per block
+- **Mermaid Diagrams** — Render `mermaid` fenced code blocks as interactive diagrams, each with:
+  - **Drag to pan** — Hold the left mouse button and drag (the cursor turns into a hand) to reposition the diagram
+  - **Per-diagram zoom** — `Ctrl/Cmd + Scroll` over a diagram zooms only that diagram (10%–300%), leaving the rest of the page untouched
+  - **Dedicated right-click menu** — Reset zoom, Copy Mermaid code, Copy PNG (rendered to the clipboard as an image), Show graph, and Show source
 - **Code Styling** — Code blocks use dark green base text and gray italic comments
 - **Scroll Quick Nav** — Floating bubble buttons in the bottom-right to jump to top/bottom
 - **Refresh** — Right-click menu refresh action manually syncs preview with latest Markdown content
@@ -35,12 +38,19 @@ A VS Code extension that provides an enhanced Markdown preview with a navigable 
 | Copy code block | Right-click a code block, or hover and click the copy icon |
 | Copy Markdown source | Preview right-click menu: `Copy Markdown source` |
 | Refresh preview | Preview right-click menu: `Refresh preview` |
+| Pan a Mermaid diagram | Hold the left mouse button over the diagram and drag |
+| Zoom a Mermaid diagram | `Ctrl/Cmd + Scroll` over the diagram (10%–300%) |
+| Mermaid diagram menu | Right-click a diagram: `Reset zoom`, `Copy mermaid code`, `Copy PNG`, `Show graph`, `Show source` |
 
 ## Requirements
 
 - VS Code `^1.125.0`
 
 ## Release Notes
+
+### 0.0.11
+
+Reworked Mermaid diagrams into interactive views: drag to pan (hand cursor), `Ctrl/Cmd + Scroll` to zoom a single diagram (10%–300%) without affecting the page, and a dedicated right-click menu (Reset zoom, Copy Mermaid code, Copy PNG, Show graph, Show source). Removed the per-diagram toolbar. Mermaid now renders labels as SVG text so diagrams can be copied to the clipboard as PNG.
 
 ### 0.0.7
 
