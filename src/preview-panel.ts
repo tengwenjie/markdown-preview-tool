@@ -1,4 +1,5 @@
 import * as vscode from 'vscode';
+import * as path from 'path';
 import MarkdownIt = require('markdown-it');
 
 interface TOCItem {
@@ -37,6 +38,8 @@ export class MarkdownPreviewPanel {
     private syncVersion: number = 0;
     private initialized: boolean = false;
     private updateTimer: NodeJS.Timeout | undefined;
+    private resourceRootsKey: string = '';
+    private readonly imageSources = new Map<string, string>();
     private readonly md: MarkdownIt;
 
     public static revive(panel: vscode.WebviewPanel, extensionUri: vscode.Uri) {
@@ -62,13 +65,305 @@ export class MarkdownPreviewPanel {
             {
                 enableScripts: true,
                 retainContextWhenHidden: true,
-                localResourceRoots: [extensionUri],
+                localResourceRoots: MarkdownPreviewPanel.buildResourceRoots(
+                    extensionUri,
+                    vscode.window.activeTextEditor?.document.fileName
+                ),
             }
         );
 
         MarkdownPreviewPanel.currentPanel = new MarkdownPreviewPanel(
             panel,
             extensionUri
+        );
+    }
+
+    /**
+     * Webviews may only load local files that live under one of these roots.
+     * Beyond the extension itself we allow the workspace folders, the folder of
+     * the previewed document and its parent, so that both `./img/a.png` and
+     * `../assets/a.png` style references resolve.
+     */
+    private static buildResourceRoots(
+        extensionUri: vscode.Uri,
+        currentFile?: string,
+        extraDirs: string[] = []
+    ): vscode.Uri[] {
+        const roots: vscode.Uri[] = [extensionUri];
+        const seen = new Set<string>([extensionUri.fsPath]);
+
+        const addDir = (dir: string) => {
+            if (!dir || seen.has(dir)) {
+                return;
+            }
+            seen.add(dir);
+            roots.push(vscode.Uri.file(dir));
+        };
+
+        for (const folder of vscode.workspace.workspaceFolders || []) {
+            if (!seen.has(folder.uri.fsPath)) {
+                seen.add(folder.uri.fsPath);
+                roots.push(folder.uri);
+            }
+        }
+
+        if (currentFile) {
+            const dir = path.dirname(currentFile);
+            addDir(dir);
+            const parent = path.dirname(dir);
+            if (parent && parent !== dir) {
+                addDir(parent);
+            }
+        }
+
+        // Folders referenced by images in the document, unless already covered.
+        for (const dir of extraDirs) {
+            const covered = roots.some((root) =>
+                MarkdownPreviewPanel.containsPath(root.fsPath, dir)
+            );
+            if (!covered) {
+                addDir(dir);
+            }
+        }
+
+        return roots;
+    }
+
+    private static containsPath(parent: string, child: string): boolean {
+        const relative = path.relative(parent, child);
+        return (
+            relative === '' ||
+            (!relative.startsWith('..') && !path.isAbsolute(relative))
+        );
+    }
+
+    /** Returns true when the roots changed and the webview was reconfigured. */
+    private updateResourceRoots(extraDirs: string[] = []): boolean {
+        const roots = MarkdownPreviewPanel.buildResourceRoots(
+            this.extensionUri,
+            this.currentFile,
+            extraDirs
+        );
+        const key = roots.map((root) => root.toString()).join('|');
+        if (key === this.resourceRootsKey) {
+            return false;
+        }
+        this.resourceRootsKey = key;
+        this.panel.webview.options = {
+            enableScripts: true,
+            localResourceRoots: roots,
+        };
+        return true;
+    }
+
+    /** Directory that relative resource paths are resolved against. */
+    private getResourceBaseDir(): string | undefined {
+        if (this.currentFile && path.isAbsolute(this.currentFile)) {
+            return path.dirname(this.currentFile);
+        }
+        const folder = vscode.workspace.workspaceFolders?.[0];
+        return folder ? folder.uri.fsPath : undefined;
+    }
+
+    /**
+     * True for values like `mailto:` or `ftp:`. A scheme needs at least two
+     * characters so Windows drive letters (`C:\img\a.png`) stay file paths.
+     */
+    private static hasUriScheme(value: string): boolean {
+        return /^[a-z][a-z0-9+.-]+:/i.test(value);
+    }
+
+    /**
+     * Turn a Markdown image/media reference into a URI the webview can load.
+     * Returns undefined when the value should be left untouched (remote URLs,
+     * data URIs, anchors, or paths we cannot resolve).
+     */
+    private resolveLocalResource(src: string): vscode.Uri | undefined {
+        const value = src.trim();
+        if (!value || value.startsWith('#')) {
+            return undefined;
+        }
+
+        // Already loadable as-is, or a scheme we must not rewrite.
+        if (value.startsWith('//') || /^(https?|data|blob|vscode-webview|vscode-resource|vscode-file):/i.test(value)) {
+            return undefined;
+        }
+
+        let filePath: string;
+
+        if (/^file:\/\//i.test(value)) {
+            filePath = vscode.Uri.parse(value).fsPath;
+        } else if (MarkdownPreviewPanel.hasUriScheme(value)) {
+            // Some other scheme (mailto:, ftp:, ...) - leave it alone.
+            return undefined;
+        } else {
+            // Drop query/hash suffixes before touching the filesystem path.
+            const withoutSuffix = value.replace(/[?#].*$/, '');
+            const decoded = this.decodeResourcePath(withoutSuffix);
+            if (!decoded) {
+                return undefined;
+            }
+            if (path.isAbsolute(decoded)) {
+                filePath = decoded;
+            } else {
+                const baseDir = this.getResourceBaseDir();
+                if (!baseDir) {
+                    return undefined;
+                }
+                filePath = path.resolve(baseDir, decoded);
+            }
+        }
+
+        const suffix = /([?#].*)$/.exec(value)?.[1] || '';
+        const fragmentIndex = suffix.indexOf('#');
+        const query = suffix.startsWith('?')
+            ? suffix.slice(1, fragmentIndex < 0 ? undefined : fragmentIndex)
+            : '';
+        const fragment = fragmentIndex < 0 ? '' : suffix.slice(fragmentIndex + 1);
+        return vscode.Uri.file(filePath).with({ query, fragment });
+    }
+
+    private resolveResourceUri(src: string): string | undefined {
+        // A protocol-relative URL needs an explicit scheme inside a webview.
+        if (src.trim().startsWith('//')) {
+            const resolved = `https:${src.trim()}`;
+            this.imageSources.set(new URL(resolved).href, resolved);
+            return resolved;
+        }
+        const resource = this.resolveLocalResource(src);
+        const resolved = resource ? this.panel.webview.asWebviewUri(resource).toString() : undefined;
+        const source = resolved || src.trim();
+        if (resource || /^(https?|data):/i.test(source)) {
+            try {
+                this.imageSources.set(new URL(source).href, resource ? resource.toString() : source);
+            } catch {
+                // Invalid image URLs cannot be loaded by the browser either.
+            }
+        }
+        return resolved;
+    }
+
+    private async handleImageAction(message: { command: string; src: string; requestId?: number }) {
+        try {
+            const source = this.imageSources.get(new URL(message.src).href);
+            if (!source) {
+                throw new Error('Image source is no longer available. Reopen the image menu.');
+            }
+            const uri = vscode.Uri.parse(source);
+            let bytes: Uint8Array;
+            let mime = '';
+            if (uri.scheme === 'file') {
+                bytes = await vscode.workspace.fs.readFile(uri.with({ query: '', fragment: '' }));
+            } else {
+                const response = await fetch(source, { signal: AbortSignal.timeout(30000) });
+                if (!response.ok) {
+                    throw new Error(`Failed to load image (${response.status})`);
+                }
+                bytes = new Uint8Array(await response.arrayBuffer());
+                mime = response.headers.get('content-type')?.split(';')[0] || '';
+            }
+            const mimeByExtension: Record<string, string> = {
+                '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg',
+                '.gif': 'image/gif', '.webp': 'image/webp', '.svg': 'image/svg+xml',
+                '.bmp': 'image/bmp', '.avif': 'image/avif', '.ico': 'image/x-icon',
+            };
+            let filename = uri.scheme === 'data' ? '' : path.basename(this.decodeResourcePath(uri.path));
+            mime = mime || mimeByExtension[path.extname(filename).toLowerCase()] || 'application/octet-stream';
+            if (!filename) {
+                const extension = Object.keys(mimeByExtension).find((ext) => mimeByExtension[ext] === mime) || '.png';
+                filename = `image${extension}`;
+            } else if (!path.extname(filename)) {
+                filename += Object.keys(mimeByExtension).find((ext) => mimeByExtension[ext] === mime) || '';
+            }
+            if (message.command === 'save-image') {
+                const baseDir = this.getResourceBaseDir();
+                const target = await vscode.window.showSaveDialog({
+                    title: 'Save image',
+                    saveLabel: 'Save image',
+                    defaultUri: baseDir ? vscode.Uri.file(path.join(baseDir, filename)) : undefined,
+                });
+                if (!target) {
+                    return;
+                }
+                await vscode.workspace.fs.writeFile(target, bytes);
+                void this.panel.webview.postMessage({ command: 'image-result', text: 'Image saved' });
+            } else {
+                void this.panel.webview.postMessage({
+                    command: 'image-data', requestId: message.requestId,
+                    data: Buffer.from(bytes).toString('base64'), mime,
+                });
+            }
+        } catch (error) {
+            const detail = error instanceof Error ? error.message : String(error);
+            void this.panel.webview.postMessage({
+                command: message.command === 'save-image' ? 'image-result' : 'image-data',
+                requestId: message.requestId, error: detail,
+            });
+        }
+    }
+
+    /**
+     * Folders holding images the document points at. Anything outside the
+     * default roots (workspace, document folder) has to be whitelisted, or the
+     * webview refuses to load the file.
+     */
+    private collectResourceDirs(markdown: string): string[] {
+        const dirs = new Set<string>();
+        const addSource = (raw: string | undefined) => {
+            if (!raw) {
+                return;
+            }
+            const resource = this.resolveLocalResource(raw);
+            if (resource) {
+                dirs.add(path.dirname(resource.fsPath));
+            }
+        };
+        // Use parsed tokens so reference images, escaped paths and nested
+        // images are handled exactly as they are by the renderer.
+        const visit = (tokens: MarkdownIt.Token[]) => {
+            for (const token of tokens) {
+                if (token.type === 'image') {
+                    addSource(token.attrGet('src') || undefined);
+                } else if (token.type === 'html_block' || token.type === 'html_inline') {
+                    this.mapHtmlResources(token.content, (src) => {
+                        addSource(src);
+                        return undefined;
+                    });
+                }
+                if (token.children) {
+                    visit(token.children);
+                }
+            }
+        };
+        visit(this.md.parse(markdown, {}));
+
+        return Array.from(dirs);
+    }
+
+    private decodeResourcePath(value: string): string {
+        try {
+            return decodeURIComponent(value);
+        } catch {
+            return value;
+        }
+    }
+
+    /** Rewrite src attributes inside raw HTML blocks (html: true is enabled). */
+    private rewriteHtmlResources(html: string): string {
+        return this.mapHtmlResources(html, (src) => this.resolveResourceUri(src));
+    }
+
+    private mapHtmlResources(html: string, mapSource: (src: string) => string | undefined): string {
+        return html.replace(/<(?:img|source|video|audio)\b(?:[^>"']|"[^"]*"|'[^']*')*>/gi, (tag) =>
+            tag.replace(/(\s[^\s=/>]+\s*=\s*)(?:"([^"]*)"|'([^']*)'|([^\s>]+))/g,
+                (attribute, prefix: string, doubleQuoted?: string, singleQuoted?: string, unquoted?: string) => {
+                    if (prefix.trim().replace(/\s*=\s*$/, '').toLowerCase() !== 'src') {
+                        return attribute;
+                    }
+                    const source = this.md.utils.unescapeAll(doubleQuoted ?? singleQuoted ?? unquoted ?? '');
+                    const resolved = mapSource(source);
+                    return resolved ? `${prefix}"${this.escapeHtml(resolved)}"` : attribute;
+                })
         );
     }
 
@@ -93,8 +388,12 @@ export class MarkdownPreviewPanel {
             (message) => {
                 if (message.command === 'copy') {
                     vscode.env.clipboard.writeText(message.text);
+                } else if (message.command === 'load-image' || message.command === 'save-image') {
+                    void this.handleImageAction(message);
                 } else if (message.command === 'refresh') {
                     void this.refreshFromSource();
+                } else if (message.command === 'open-link') {
+                    void this.openLink(message.href);
                 } else if (message.command === 'set-theme') {
                     this.currentTheme = message.theme;
                 } else if (message.command === 'scroll-editor') {
@@ -191,9 +490,18 @@ export class MarkdownPreviewPanel {
     }
 
     private doUpdate() {
+        // Must run before rendering: image URIs are only loadable when the
+        // document folder is part of the webview's localResourceRoots.
+        // Changing the options makes VS Code re-send the webview content, so
+        // rebuild the full document instead of patching it over a message.
         const markdown = this.rawMarkdown;
+        if (this.updateResourceRoots(this.collectResourceDirs(markdown))) {
+            this.initialized = false;
+        }
+
         const tocItems = this.extractTOC(markdown);
         const tocTree = this.buildTOCTree(tocItems);
+        this.imageSources.clear();
         const html = this.md.render(markdown);
         const filename = this.currentFile
             ? this.currentFile.replace(/^.*[\\/]/, '')
@@ -267,6 +575,138 @@ export class MarkdownPreviewPanel {
         }
 
         this.updateFromActiveEditor();
+    }
+
+    /**
+     * Open a link clicked in the preview. Remote links go to the OS, local
+     * files open in the editor next to the preview, and `path.md#heading`
+     * additionally jumps to that heading.
+     */
+    private async openLink(href: string): Promise<void> {
+        const value = (href || '').trim();
+        if (!value) {
+            return;
+        }
+
+        if (/^(javascript|vbscript|data|command):/i.test(value)) {
+            void vscode.window.showWarningMessage(`Blocked link: ${value}`);
+            return;
+        }
+
+        const isFileUri = /^file:\/\//i.test(value);
+        if (!isFileUri && MarkdownPreviewPanel.hasUriScheme(value)) {
+            // http(s), mailto, vscode, ... - let VS Code / the OS handle it.
+            try {
+                await vscode.env.openExternal(vscode.Uri.parse(value));
+            } catch {
+                void vscode.window.showWarningMessage(`Cannot open link: ${value}`);
+            }
+            return;
+        }
+
+        let target = value;
+        let fragment = '';
+        const hashIndex = target.indexOf('#');
+        if (hashIndex >= 0) {
+            fragment = target.slice(hashIndex + 1);
+            target = target.slice(0, hashIndex);
+        }
+        if (!target) {
+            // Pure `#anchor`, already handled inside the webview.
+            return;
+        }
+
+        let filePath: string;
+        if (isFileUri) {
+            filePath = vscode.Uri.parse(target).fsPath;
+        } else {
+            const decoded = this.decodeResourcePath(target.replace(/\?.*$/, ''));
+            if (path.isAbsolute(decoded)) {
+                filePath = decoded;
+            } else {
+                const baseDir = this.getResourceBaseDir();
+                if (!baseDir) {
+                    void vscode.window.showWarningMessage(`Cannot resolve link: ${value}`);
+                    return;
+                }
+                filePath = path.resolve(baseDir, decoded);
+            }
+        }
+
+        const resolved = await this.resolveLinkTarget(filePath);
+        if (!resolved) {
+            void vscode.window.showWarningMessage(`File not found: ${filePath}`);
+            return;
+        }
+
+        const column =
+            this.findVisibleMarkdownEditor()?.viewColumn || vscode.ViewColumn.One;
+
+        if (resolved.isDirectory) {
+            await vscode.commands.executeCommand('revealInExplorer', resolved.uri);
+            return;
+        }
+
+        if (/\.(md|markdown|mdown|mkd)$/i.test(resolved.uri.fsPath)) {
+            const document = await vscode.workspace.openTextDocument(resolved.uri);
+            const editor = await vscode.window.showTextDocument(document, {
+                viewColumn: column,
+            });
+            this.update(document.getText(), document.fileName, true);
+            if (fragment) {
+                this.revealHeading(editor, fragment);
+            }
+            return;
+        }
+
+        await vscode.commands.executeCommand('vscode.open', resolved.uri, column);
+    }
+
+    /** Accepts extension-less links (`[x](./notes)` -> `notes.md`). */
+    private async resolveLinkTarget(
+        filePath: string
+    ): Promise<{ uri: vscode.Uri; isDirectory: boolean } | undefined> {
+        const candidates = [filePath];
+        if (!path.extname(filePath)) {
+            candidates.push(`${filePath}.md`);
+        }
+
+        let directoryMatch: { uri: vscode.Uri; isDirectory: boolean } | undefined;
+
+        for (const candidate of candidates) {
+            const uri = vscode.Uri.file(candidate);
+            try {
+                const stat = await vscode.workspace.fs.stat(uri);
+                if ((stat.type & vscode.FileType.Directory) !== 0) {
+                    // Keep looking: `notes.md` wins over a `notes/` folder.
+                    directoryMatch = directoryMatch || { uri, isDirectory: true };
+                    continue;
+                }
+                return { uri, isDirectory: false };
+            } catch {
+                // Try the next candidate.
+            }
+        }
+
+        return directoryMatch;
+    }
+
+    /** Move the cursor to the heading a `#fragment` refers to. */
+    private revealHeading(editor: vscode.TextEditor, fragment: string) {
+        const wanted = slugify(this.decodeResourcePath(fragment));
+        const lines = editor.document.getText().split('\n');
+        for (let i = 0; i < lines.length; i++) {
+            const match = /^#{1,6}\s+(.*)$/.exec(lines[i]);
+            if (match && slugify(match[1].trim()) === wanted) {
+                const position = new vscode.Position(i, 0);
+                editor.selection = new vscode.Selection(position, position);
+                editor.revealRange(
+                    new vscode.Range(position, position),
+                    vscode.TextEditorRevealType.InCenter
+                );
+                return;
+            }
+        }
     }
 
     private escapeHtml(value: string): string {
@@ -383,6 +823,16 @@ export class MarkdownPreviewPanel {
             linkify: true,
         });
 
+        // markdown-it drops `file:` destinations by default, which silently
+        // swallows images written as file:///C:/pictures/a.png.
+        const defaultValidateLink = md.validateLink.bind(md);
+        md.validateLink = (url: string) => {
+            if (/^file:/i.test(url.trim())) {
+                return true;
+            }
+            return defaultValidateLink(url);
+        };
+
         const defaultHeadingOpen: MarkdownIt.Renderer.RenderRule =
             md.renderer.rules.heading_open ||
             ((tokens, idx, options, _env, self) => {
@@ -414,6 +864,32 @@ export class MarkdownPreviewPanel {
 
         md.renderer.rules.code_block = (tokens, idx) => {
             return this.renderCodeBlock(tokens[idx].content);
+        };
+
+        const defaultImage: MarkdownIt.Renderer.RenderRule =
+            md.renderer.rules.image ||
+            ((tokens, idx, options, _env, self) => {
+                return self.renderToken(tokens, idx, options);
+            });
+
+        md.renderer.rules.image = (tokens, idx, options, env, self) => {
+            const token = tokens[idx];
+            const srcIndex = token.attrIndex('src');
+            if (srcIndex >= 0 && token.attrs) {
+                const resolved = this.resolveResourceUri(token.attrs[srcIndex][1]);
+                if (resolved) {
+                    token.attrs[srcIndex][1] = resolved;
+                }
+            }
+            return defaultImage(tokens, idx, options, env, self);
+        };
+
+        md.renderer.rules.html_block = (tokens, idx) => {
+            return this.rewriteHtmlResources(tokens[idx].content);
+        };
+
+        md.renderer.rules.html_inline = (tokens, idx) => {
+            return this.rewriteHtmlResources(tokens[idx].content);
         };
 
         return md;
@@ -512,7 +988,11 @@ body {
     ): string {
         const hasTOC = tocTree.length > 0;
         const tocJSON = JSON.stringify(tocItems);
-        const safeMarkdown = JSON.stringify(rawMarkdown);
+        // Kept as escaped text inside a hidden element: reading it back with
+        // textContent returns the source verbatim. A <script> holder would
+        // instead hand back the raw markup, and any `</script>` in the document
+        // would terminate the tag early.
+        const safeMarkdown = this.escapeHtml(rawMarkdown);
 
         const webviewScriptUri = this.panel.webview.asWebviewUri(
             vscode.Uri.joinPath(this.extensionUri, 'dist', 'webview.js')
@@ -781,6 +1261,7 @@ body {
 
 /* Context Menu */
 #context-menu,
+#image-context-menu,
 #mermaid-context-menu {
     position: fixed;
     display: none;
@@ -794,8 +1275,10 @@ body {
     z-index: 1000;
 }
 #context-menu.show,
+#image-context-menu.show,
 #mermaid-context-menu.show { display: flex; }
 #context-menu button,
+#image-context-menu button,
 #mermaid-context-menu button {
     display: block;
     width: 100%;
@@ -810,6 +1293,7 @@ body {
     text-align: left;
 }
 #context-menu button:hover,
+#image-context-menu button:hover,
 #mermaid-context-menu button:hover { background: var(--md-btn-hover-bg); color: var(--md-fg); }
 #context-menu button:disabled,
 #mermaid-context-menu button:disabled {
@@ -1033,7 +1517,13 @@ body.no-toc #toc-panel { display: none; }
     z-index: 99;
     transition: right 0.25s ease;
 }
-#scroll-bubble button {
+#toc-toggle-button {
+    position: fixed;
+    top: 32px;
+    right: var(--bubble-right, 32px);
+    z-index: 99;
+}
+.floating-button {
     display: flex;
     align-items: center;
     justify-content: center;
@@ -1045,11 +1535,13 @@ body.no-toc #toc-panel { display: none; }
     color: var(--md-bubble-fg);
     cursor: pointer;
     box-shadow: 0 2px 8px rgba(0,0,0,0.08);
-    transition: background 0.15s, color 0.15s, opacity 0.3s;
+    transition: background 0.15s, color 0.15s, opacity 0.3s, right 0.25s ease;
     opacity: 0.6;
 }
-#scroll-bubble button:hover { background: var(--md-accent); color: #ffffff; opacity: 1; }
-#scroll-bubble button svg { width: 16px; height: 16px; }
+.floating-button:hover:not(:disabled) { background: var(--md-accent); color: #ffffff; opacity: 1; }
+.floating-button:disabled { cursor: default; opacity: 0.3; }
+.floating-button:focus-visible { outline: 2px solid var(--md-accent); outline-offset: 2px; }
+.floating-button svg { width: 16px; height: 16px; }
 
 </style>
 </head>
@@ -1089,16 +1581,25 @@ body.no-toc #toc-panel { display: none; }
     <button type="button" data-action="show-source">Show source</button>
 </div>
 
+<div id="image-context-menu" role="menu" aria-hidden="true">
+    <button type="button" role="menuitem" data-action="copy-image">Copy image</button>
+    <button type="button" role="menuitem" data-action="save-image">Save image</button>
+</div>
+
+<button id="toc-toggle-button" class="floating-button" type="button" title="Toggle contents" aria-label="Toggle contents" aria-controls="toc-panel" aria-expanded="${hasTOC}">
+    <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M1 2h2v2H1V2zm4 0h10v2H5V2zM1 7h2v2H1V7zm4 0h10v2H5V7zM1 12h2v2H1v-2zm4 0h10v2H5v-2z"/></svg>
+</button>
+
 <div id="scroll-bubble">
-    <button id="scroll-top" title="Back to top">
+    <button id="scroll-top" class="floating-button" title="Back to top">
         <svg viewBox="0 0 16 16" fill="currentColor"><path fill-rule="evenodd" d="M8 15a.5.5 0 00.5-.5V2.707l4.146 4.147a.5.5 0 00.708-.708l-5-5a.5.5 0 00-.708 0l-5 5a.5.5 0 10.708.708L7.5 2.707V14.5a.5.5 0 00.5.5z"/></svg>
     </button>
-    <button id="scroll-bottom" title="Go to bottom">
+    <button id="scroll-bottom" class="floating-button" title="Go to bottom">
         <svg viewBox="0 0 16 16" fill="currentColor"><path fill-rule="evenodd" d="M8 1a.5.5 0 01.5.5v11.793l4.146-4.147a.5.5 0 01.708.708l-5 5a.5.5 0 01-.708 0l-5-5a.5.5 0 11.708-.708L7.5 13.293V1.5A.5.5 0 018 1z"/></svg>
     </button>
 </div>
 
-<script type="text/markdown-source" id="markdown-source">${safeMarkdown}</script>
+<div id="markdown-source" hidden>${safeMarkdown}</div>
 
 <script src="${webviewScriptUri}"></script>
 <script>
@@ -1109,6 +1610,10 @@ body.no-toc #toc-panel { display: none; }
     var contentArea = document.getElementById('content-area');
     var contextMenu = document.getElementById('context-menu');
     var mermaidContextMenu = document.getElementById('mermaid-context-menu');
+    var imageContextMenu = document.getElementById('image-context-menu');
+    var currentImage = null;
+    var imageRequestId = 0;
+    var imageRequests = new Map();
     var currentMermaidBlock = null;
     var toast = document.getElementById('toast');
     var toastTimer;
@@ -1129,6 +1634,7 @@ body.no-toc #toc-panel { display: none; }
 
     // ====== TOC Toggle ======
     var scrollBubble = document.getElementById('scroll-bubble');
+    var tocToggleButton = document.getElementById('toc-toggle-button');
     var tocWidth = 260;
 
     function getTOCWidth() {
@@ -1136,12 +1642,13 @@ body.no-toc #toc-panel { display: none; }
     }
 
     function updateBubblePosition() {
-        if (document.body.classList.contains('no-toc') || tocPanel.classList.contains('collapsed')) {
-            scrollBubble.style.setProperty('--bubble-right', '32px');
-        } else {
-            var w = getTOCWidth();
-            scrollBubble.style.setProperty('--bubble-right', (32 + w) + 'px');
-        }
+        var hasContents = !document.body.classList.contains('no-toc');
+        var expanded = hasContents && !tocPanel.classList.contains('collapsed');
+        var right = (32 + (expanded ? getTOCWidth() : 0)) + 'px';
+        scrollBubble.style.setProperty('--bubble-right', right);
+        tocToggleButton.style.setProperty('--bubble-right', right);
+        tocToggleButton.disabled = !hasContents;
+        tocToggleButton.setAttribute('aria-expanded', String(expanded));
     }
 
     function collapseTOC() {
@@ -1162,6 +1669,7 @@ body.no-toc #toc-panel { display: none; }
         }
     }
 
+    tocToggleButton.addEventListener('click', toggleTOC);
     updateBubblePosition();
 
     // ====== Context Menu ======
@@ -1194,6 +1702,84 @@ body.no-toc #toc-panel { display: none; }
         mermaidContextMenu.setAttribute('aria-hidden', 'true');
     }
 
+    function hideImageContextMenu() {
+        imageContextMenu.classList.remove('show');
+        imageContextMenu.setAttribute('aria-hidden', 'true');
+        currentImage = null;
+    }
+
+    function showImageContextMenu(image, x, y) {
+        currentImage = image;
+        imageContextMenu.classList.add('show');
+        imageContextMenu.setAttribute('aria-hidden', 'false');
+        var rect = imageContextMenu.getBoundingClientRect();
+        imageContextMenu.style.left = Math.max(8, Math.min(x, window.innerWidth - rect.width - 8)) + 'px';
+        imageContextMenu.style.top = Math.max(8, Math.min(y, window.innerHeight - rect.height - 8)) + 'px';
+    }
+
+    function loadImageBlob(src) {
+        return new Promise(function(resolve, reject) {
+            if (!vscodeApi) { reject(new Error('Image actions require VS Code')); return; }
+            var requestId = ++imageRequestId;
+            var timer = setTimeout(function() {
+                imageRequests.delete(requestId);
+                reject(new Error('Image loading timed out'));
+            }, 35000);
+            imageRequests.set(requestId, { resolve: resolve, reject: reject, timer: timer });
+            vscodeApi.postMessage({ command: 'load-image', src: src, requestId: requestId });
+        });
+    }
+
+    function imageBlobToPng(blob) {
+        return new Promise(function(resolve, reject) {
+            var url = URL.createObjectURL(blob);
+            var image = new Image();
+            image.onload = function() {
+                try {
+                    var canvas = document.createElement('canvas');
+                    canvas.width = image.naturalWidth;
+                    canvas.height = image.naturalHeight;
+                    var context = canvas.getContext('2d');
+                    if (!context || !canvas.width || !canvas.height) { throw new Error('Could not decode image'); }
+                    context.drawImage(image, 0, 0);
+                    canvas.toBlob(function(png) {
+                        if (png) { resolve(png); } else { reject(new Error('Could not convert image')); }
+                    }, 'image/png');
+                } catch (err) { reject(err); }
+                finally { URL.revokeObjectURL(url); }
+            };
+            image.onerror = function() {
+                URL.revokeObjectURL(url);
+                reject(new Error('Could not decode image'));
+            };
+            image.src = url;
+        });
+    }
+
+    imageContextMenu.addEventListener('click', function(e) {
+        var item = e.target.closest('[data-action]');
+        if (!item || !currentImage) { return; }
+        var src = currentImage.currentSrc || currentImage.src;
+        var action = item.getAttribute('data-action');
+        hideImageContextMenu();
+        if (action === 'save-image') {
+            if (vscodeApi) { vscodeApi.postMessage({ command: 'save-image', src: src }); }
+            else { showToast('Image actions require VS Code'); }
+            return;
+        }
+        if (!(navigator.clipboard && navigator.clipboard.write) || typeof ClipboardItem === 'undefined') {
+            showToast('Copy image is not supported here');
+            return;
+        }
+        loadImageBlob(src).then(imageBlobToPng).then(function(png) {
+            return navigator.clipboard.write([new ClipboardItem({ 'image/png': png })]);
+        }).then(function() {
+            showToast('Image copied to clipboard');
+        }).catch(function(err) {
+            showToast('Copy image failed: ' + err.message);
+        });
+    });
+
     function showMermaidContextMenu(x, y) {
         if (!mermaidContextMenu) { return; }
         var actions = currentMermaidBlock ? currentMermaidBlock.__mermaidActions : null;
@@ -1214,7 +1800,17 @@ body.no-toc #toc-panel { display: none; }
     }
 
     document.addEventListener('contextmenu', function(e) {
-        if (e.target.closest('#context-menu') || e.target.closest('#mermaid-context-menu')) { return; }
+        if (e.target.closest('#context-menu, #mermaid-context-menu, #image-context-menu')) { return; }
+        hideImageContextMenu();
+        var image = e.target.closest('.markdown-body img');
+        if (image) {
+            e.preventDefault();
+            e.stopPropagation();
+            hideContextMenu();
+            hideMermaidContextMenu();
+            showImageContextMenu(image, e.clientX, e.clientY);
+            return;
+        }
         var mermaidBlock = e.target.closest('.mermaid-block');
         if (mermaidBlock) {
             e.preventDefault();
@@ -1230,15 +1826,17 @@ body.no-toc #toc-panel { display: none; }
     });
 
     document.addEventListener('click', function(e) {
-        if (e.target.closest('#context-menu') || e.target.closest('#mermaid-context-menu')) { return; }
+        if (e.target.closest('#context-menu, #mermaid-context-menu, #image-context-menu')) { return; }
         hideContextMenu();
         hideMermaidContextMenu();
+        hideImageContextMenu();
     });
 
     document.addEventListener('keydown', function(e) {
         if (e.key === 'Escape') {
             hideContextMenu();
             hideMermaidContextMenu();
+            hideImageContextMenu();
         }
     });
 
@@ -1349,6 +1947,78 @@ body.no-toc #toc-panel { display: none; }
         });
     }
 
+    // ====== Content Link Click ======
+    // Webviews cannot navigate, so every link is handled here: in-page anchors
+    // scroll the content area, everything else is opened by the extension.
+    function slugifyAnchor(text) {
+        return String(text)
+            .toLowerCase()
+            .trim()
+            .replace(/[^\\w\\u4e00-\\u9fa5]+/g, '-')
+            .replace(/^-+|-+$/g, '')
+            .replace(/-+/g, '-');
+    }
+
+    function decodeAnchor(value) {
+        try {
+            return decodeURIComponent(value);
+        } catch (err) {
+            return value;
+        }
+    }
+
+    function findAnchorTarget(rawId) {
+        if (!rawId) { return null; }
+        var decoded = decodeAnchor(rawId);
+        var candidates = [rawId, decoded, slugifyAnchor(decoded)];
+        for (var i = 0; i < candidates.length; i++) {
+            if (!candidates[i]) { continue; }
+            var el = document.getElementById(candidates[i]);
+            if (el) { return el; }
+        }
+        // Last resort: match on the heading text itself.
+        var wanted = slugifyAnchor(decoded);
+        var headings = document.querySelectorAll('.markdown-body h1, .markdown-body h2, .markdown-body h3, .markdown-body h4, .markdown-body h5, .markdown-body h6');
+        for (var j = 0; j < headings.length; j++) {
+            if (slugifyAnchor(headings[j].textContent) === wanted) { return headings[j]; }
+        }
+        return null;
+    }
+
+    function scrollToAnchor(rawId) {
+        var target = findAnchorTarget(rawId);
+        if (!target) {
+            showToast('Anchor not found: #' + decodeAnchor(rawId));
+            return;
+        }
+        lastSyncFromExtension = Date.now();
+        target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        var line = headingLines[target.id];
+        if (line && vscodeApi) {
+            vscodeApi.postMessage({ command: 'scroll-editor', line: line });
+        }
+    }
+
+    contentArea.addEventListener('click', function(e) {
+        if (e.button !== 0 || e.defaultPrevented) { return; }
+        var anchor = e.target.closest('a[href]');
+        if (!anchor) { return; }
+        var href = anchor.getAttribute('href');
+        if (!href) { return; }
+        e.preventDefault();
+        // The webview host has its own document-level link handler; letting the
+        // click reach it would open external links a second time.
+        e.stopPropagation();
+        hideContextMenu();
+        hideMermaidContextMenu();
+        hideImageContextMenu();
+        if (href.charAt(0) === '#') {
+            scrollToAnchor(href.slice(1));
+        } else if (vscodeApi) {
+            vscodeApi.postMessage({ command: 'open-link', href: href });
+        }
+    });
+
     // ====== Scroll Spy ======
     var tocLinks = tocList ? tocList.querySelectorAll('.toc-item > a') : [];
     var headingIds = [];
@@ -1428,13 +2098,28 @@ body.no-toc #toc-panel { display: none; }
     // Sync: listen for scroll-preview messages from extension
     window.addEventListener('message', function(e) {
         var msg = e.data;
-        if (msg.command === 'scroll-preview') {
+        if (msg.command === 'image-data') {
+            var request = imageRequests.get(msg.requestId);
+            if (!request) { return; }
+            clearTimeout(request.timer);
+            imageRequests.delete(msg.requestId);
+            if (msg.error) { request.reject(new Error(msg.error)); return; }
+            try {
+                var binary = atob(msg.data);
+                var bytes = new Uint8Array(binary.length);
+                for (var i = 0; i < binary.length; i++) { bytes[i] = binary.charCodeAt(i); }
+                request.resolve(new Blob([bytes], { type: msg.mime }));
+            } catch (err) { request.reject(err); }
+        } else if (msg.command === 'image-result') {
+            showToast(msg.error ? 'Save image failed: ' + msg.error : msg.text);
+        } else if (msg.command === 'scroll-preview') {
             lastSyncFromExtension = Date.now();
             var el = document.getElementById(msg.id);
             if (el) {
                 el.scrollIntoView({ behavior: 'smooth', block: 'start' });
             }
         } else if (msg.command === 'update-content') {
+            hideImageContextMenu();
             // Preserve scroll position
             var savedScroll = contentArea.scrollTop;
             var savedHeading = activeId;
@@ -1605,6 +2290,8 @@ body.no-toc #toc-panel { display: none; }
                     e.preventDefault();
                     e.stopPropagation();
                     hideContextMenu();
+                    hideMermaidContextMenu();
+                    hideImageContextMenu();
                     copyCodeFromPre(pre, true);
                 });
             }

@@ -18,6 +18,9 @@ A VS Code extension that provides an enhanced Markdown preview with a navigable 
   - **Drag to pan** — Hold the left mouse button and drag (the cursor turns into a hand) to reposition the diagram
   - **Per-diagram zoom** — `Ctrl/Cmd + Scroll` over a diagram zooms only that diagram (10%–300%), leaving the rest of the page untouched
   - **Dedicated right-click menu** — Reset zoom, Copy Mermaid code, Copy PNG (rendered to the clipboard as an image), Show graph, and Show source
+- **Links** — Clicking a link works: `#heading` anchors scroll the preview (and the editor follows), links to other files open in the editor beside the preview (`other.md#heading` also jumps to that heading), non-text files open with their default VS Code editor, and `http(s)` / `mailto:` links open outside VS Code
+- **Images** — Local images display in the preview, whether written as a relative path (`./img/a.png`, `../assets/a.png`), an absolute path, a `file://` URI, a remote URL, a `data:` URI, or a raw `<img>` tag
+- **Image Menu** — Right-click an image for `Copy image` (copy the image to the clipboard as PNG) or `Save image` (choose a location and save the original image file).
 - **Code Styling** — Code blocks use dark green base text and gray italic comments
 - **Scroll Quick Nav** — Floating bubble buttons in the bottom-right to jump to top/bottom
 - **Refresh** — Right-click menu refresh action manually syncs preview with latest Markdown content
@@ -29,12 +32,14 @@ A VS Code extension that provides an enhanced Markdown preview with a navigable 
 | Open Preview | `Ctrl+Shift+V` / `Cmd+Shift+V` |
 | Open Preview to Side | Command: `Open Markdown Preview to the Side` |
 | Open preview menu | Right-click inside the preview |
-| Toggle TOC | Preview right-click menu: `Toggle contents` |
+| Copy or save an image | Right-click an image: `Copy image` / `Save image` |
+| Toggle TOC | Floating button at the top-right of the content area, or preview right-click menu: `Toggle contents` |
 | Collapse TOC items | Click ▼/▶ toggle arrows |
 | Resize TOC | Drag left edge of the sidebar |
 | Zoom in/out | `Ctrl/Cmd + Scroll` |
 | Reset zoom | Preview right-click menu: `Zoom 100%` |
 | Switch theme | Preview right-click menu: `Switch theme` |
+| Follow a link | Click it in the preview |
 | Copy code block | Right-click a code block, or hover and click the copy icon |
 | Copy Markdown source | Preview right-click menu: `Copy Markdown source` |
 | Refresh preview | Preview right-click menu: `Refresh preview` |
@@ -47,6 +52,12 @@ A VS Code extension that provides an enhanced Markdown preview with a navigable 
 - VS Code `^1.125.0`
 
 ## Release Notes
+
+### 0.1.0
+
+Fixed local images not rendering. Image sources are now rewritten to webview URIs and the referenced folders are added to the preview's allowed resource roots, so relative, absolute, and `file://` paths all display — in Markdown image syntax and raw `<img>` tags alike.
+
+Links in the preview are now clickable: in-page `#heading` anchors, links to other files (opened in the editor, with `#heading` jumps), and external `http(s)` / `mailto:` links. `Copy Markdown source` now copies the document verbatim instead of an escaped string.
 
 ### 0.0.11
 
