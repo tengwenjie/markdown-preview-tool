@@ -1314,7 +1314,7 @@ body {
 #content-area {
     flex: 1;
     overflow-y: auto;
-    padding: 32px 5px;
+    padding: 32px 15px;
     max-width: none;
     margin: 0;
     width: 100%;
